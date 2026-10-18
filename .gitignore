@@ -1,0 +1,9 @@
+# Secrets: API keys and Google login files must never be committed
+.env
+credentials.json
+token.json
+
+# Python
+.venv/
+__pycache__/
+*.pyc
