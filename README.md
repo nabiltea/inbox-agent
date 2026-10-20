@@ -2,7 +2,7 @@
 
 An AI agent that organizes my Gmail. It sorts every email into labels, flags the emails that need a reply or an action from me, drafts replies, and shows everything on a web page with a daily summary. Several Claude models work together, each with its own job, and nothing is ever sent without my approval.
 
-**Status:** Steps 1 to 3 done. The agent can read my inbox and sort emails with Claude Haiku, as a dry run that changes nothing in Gmail yet. Next: add "needs action" and "Unsorted" to triage.
+**Status:** Steps 1 to 3 done, including the triage upgrade. The agent reads my inbox, sorts each email with Claude Haiku, flags what needs a reply or an action, and suggests new labels for emails that fit none. It's still a dry run that changes nothing in Gmail. Next: Step 4, labels.
 
 ## How it works
 
@@ -85,20 +85,29 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 - **Found:** two similar career-advice newsletters got different labels ("Job Alerts" and "Promotions"), because neither description said where newsletters belong. This led to the decision that label descriptions need care, and that the agent should suggest labels rather than create them.
 - **Ideas from review:** a "needs action" flag for emails that need me to do something rather than reply (sign a contract, verify an account), and an "Unsorted" label with suggestions for emails that fit no label.
 
+### Step 3b: Triage upgrade (needs action, Unsorted)
+- **Built:** triage now also returns `needs_action` with a short to-do (`action`), and can choose "Unsorted" with a `suggested_label` and `suggested_description`. It prints a summary at the end (emails per label, how many need a reply or action), and `python triage.py 50` sorts more than 20 emails.
+- **Learned:** optional fields in structured outputs (`str | None`), `Field` descriptions that act as instructions for each field, writing prompt rules for edge cases, and `if __name__ == "__main__"` so the web page can reuse `triage()` later.
+- **Result:** on the 50 newest emails, all 8 real actions were found: a contract to sign (and its reminder), an account to verify, and five LinkedIn messages from a recruiter. Two emails went to Unsorted with sensible suggestions for new labels. Cost: $0.0111 for 50 emails, about 22 cents per 1,000. That's up from 13 cents because the prompt and the answer are longer.
+- **Found:**
+  - A first test gave inconsistent results for LinkedIn "X just messaged you" emails: one marked as needing a reply, two marked as nothing. These are automated notifications, and the reply happens on LinkedIn, not by email. A new prompt rule fixed it: a message from a real person on another site counts as an **action** (reply on that site), not an email reply. After the fix, all five were consistent.
+  - LinkedIn sent five separate notifications for the same conversation, which gave five identical to-dos. The web page should group to-dos from the same conversation.
+  - Career newsletters are still split between "Job Alerts" and "Promotions". That gets fixed with label descriptions in Step 4.
+
 ## What's left
 
 - [x] **Step 1:** First call to Claude
 - [x] **Step 2:** Connect to Gmail
 - [x] **Step 3:** Triage (dry run)
-- [ ] **Triage upgrade:** add `needs_action` with what to do, and "Unsorted" with a suggested label name and description
+- [x] **Triage upgrade:** `needs_action` with what to do, and "Unsorted" with a suggested label name and description
 - [ ] **Step 4, labels:** read my existing Gmail labels (including my Indeed and LinkedIn Job Alerts filters), move labels and descriptions into `labels.json`, have the Label Designer suggest a starting set, then apply labels in Gmail and log every decision in SQLite
 - [ ] **Step 5:** my own Gmail MCP server, with tools to read emails and save drafts but none to send or delete. Test it in Claude Desktop
 - [ ] **Step 6:** the Drafter agent and the Critic
-- [ ] **Step 7:** web page with a daily summary, to-do list, drafted replies and label suggestions, and a way to run the agent every day
+- [ ] **Step 7:** web page with a daily summary, to-do list, drafted replies and label suggestions, and a way to run the agent every day. Group to-dos that come from the same conversation
 - [ ] **Step 8:** accuracy tests (evals), README polish and a demo video
 
 **Open questions**
-- Where should LinkedIn and Indeed emails that aren't job alerts go (career newsletters, "who viewed your profile")?
+- Where should LinkedIn and Indeed emails that aren't job alerts go (career newsletters, "who viewed your profile", post reactions, message notifications)? Right now LinkedIn message notifications go to "Personal", even though they're automated.
 - Should the daily run happen automatically each morning (Windows Task Scheduler) or when I open the web page?
 
 ## Project files
@@ -108,7 +117,7 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 | `hello_claude.py` | Step 1: first call to Claude |
 | `gmail_client.py` | All Gmail code: login, fetch emails |
 | `show_inbox.py` | Step 2: prints the 20 newest inbox emails |
-| `triage.py` | Step 3: sorts emails with Claude Haiku (dry run) |
+| `triage.py` | Step 3: sorts emails with Claude Haiku, flags replies and actions, suggests labels (dry run) |
 | `requirements.txt` | Python packages, with exact versions |
 | `.env.example` | Template for the API key file |
 
@@ -127,4 +136,4 @@ Not in Git: `.env` (API key), `credentials.json` (Google app file), `token.json`
 4. In Google Cloud Console, turn on the Gmail API, set up the OAuth consent screen with yourself as a test user, and create a **Desktop app** OAuth client. Save its JSON file as `credentials.json` in the project folder.
 5. Run `python hello_claude.py` to check the Claude connection.
 6. Run `python show_inbox.py` to sign in to Gmail and list your 20 newest emails.
-7. Run `python triage.py` to see which label Claude would give each of those emails, and which ones need a reply. Nothing in Gmail changes.
+7. Run `python triage.py` to see which label Claude would give each of your 20 newest emails, which ones need a reply or an action, and which fit no label. Add a number to sort more, for example `python triage.py 50`. Nothing in Gmail changes.
