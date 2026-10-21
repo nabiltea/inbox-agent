@@ -2,7 +2,7 @@
 
 An AI agent that organizes my Gmail. It sorts every email into labels, flags the emails that need a reply or an action from me, drafts replies, and shows everything on a web page with a daily summary. Several Claude models work together, each with its own job, and nothing is ever sent without my approval.
 
-**Status:** Steps 1 to 3 done, including the triage upgrade. The agent reads my inbox, sorts each email with Claude Haiku, flags what needs a reply or an action, and suggests new labels for emails that fit none. It's still a dry run that changes nothing in Gmail. Step 4 is under way: the Label Designer suggested a label set, I reviewed it, and triage now sorts with those 11 labels. Next: applying the labels in Gmail.
+**Status:** Steps 1 to 4 done. The agent reads my inbox, sorts each email into one of 11 labels designed by Claude Opus and reviewed by me, flags what needs a reply or an action, and suggests new labels for emails that fit none. With `--apply`, it adds the labels in Gmail and archives sorted emails, so the inbox only holds what still needs me. It records every decision in a database, so it never sorts the same email twice and any run can be undone. It has sorted my 10 newest emails so far. Next: label the rest of the inbox, then Step 5 (my own Gmail MCP server).
 
 ## How it works
 
@@ -22,7 +22,7 @@ flowchart TD
     A --> W
 ```
 
-Built so far: `gmail_client.py`, Triage (dry run) and the Label Designer. Everything else is planned.
+Built so far: `gmail_client.py`, Triage (including applying labels in Gmail), the Label Designer and the SQLite log. Everything else is planned.
 
 | Part | Model | Job |
 |---|---|---|
@@ -40,6 +40,7 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 | Action | Who decides | Why |
 |---|---|---|
 | Apply a label | Agent alone | Affects one email, easy to undo |
+| Archive a sorted email | Agent alone | Easy to undo. Emails that need a reply or an action, and Unsorted ones, stay in the inbox |
 | Flag "needs reply" or "needs action" | Agent alone | It's only information |
 | Create a new label | Agent suggests, I approve | Changes how every future email is sorted |
 | Draft a reply | Agent alone | It's only a draft |
@@ -51,7 +52,10 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 
 - **No send or delete tools.** The agent can label, flag and draft, nothing more. Even if an email tricks the model, it can't send or delete anything.
 - **Prompt injection defense.** Anyone can email me, so email content is untrusted. The email goes inside `<email>` tags, and the prompt says to treat everything inside them as content, never as instructions. Triage also has no tools, so the worst a malicious email can do is get itself mislabeled.
-- **Least privilege.** The app asks Google only for the permissions the current step needs. Right now that's read-only.
+- **Least privilege, and being honest about its limits.** The app asks Google only for the permissions the current step needs. Steps 2 and 3 were read-only. Applying labels needs `gmail.modify`, the narrowest Google permission that can change labels on emails. It also covers drafts and sending, so the real safety boundary is the code: `gmail_client.py` has no function that sends or deletes anything.
+- **Every change can be undone.** The agent only adds labels and archives, and it never deletes anything. Every change is logged, and `undo.py` reverses the last run: it removes the labels the agent added and moves archived emails back into the inbox. Labels that were already on an email, for example from my own Gmail filters, are recorded as such and left alone by undo.
+- **Archive only what doesn't need me.** Emails that need a reply or an action, and Unsorted ones, stay in the inbox. So a wrong label can never hide something I have to deal with.
+- **Start small and check.** The first real run labeled only 10 emails. A separate check read the labels back from Gmail, rather than trusting the script's own output. Undo was tested the same way before relabeling.
 - **Secrets stay out of Git.** The API key (`.env`), the Google app file (`credentials.json`) and my saved login (`token.json`) are all in `.gitignore`.
 - **Less data sent to the model.** Triage sends only the sender, subject and preview, not the full email.
 - **Personal data stays out of Git.** The Label Designer's suggestions quote subjects from my real emails, and its label descriptions name companies I applied to, so `labels_proposed.json` is in `.gitignore`. The final label file will be handled the same way, with a shareable example file in the repo instead.
@@ -66,7 +70,10 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 - **Gmail filters and the agent work together.** My filters already sort job alerts by sender address. The agent catches the ones the filters miss by recognizing what an email is, not just who sent it.
 - **Facts come from code, judgment comes from the model.** Anything the code can check for itself (like whether a label already exists in Gmail) is computed in code, not asked of the model. The model is only used for decisions that need judgment.
 - **Label descriptions are the prompt.** The model only knows what a label means from its description, so fixing wrong labels usually means rewriting descriptions.
-- **A log of every decision (planned).** A SQLite database will record what the agent did to each email. It means no email is processed twice, and it provides the daily summary, an undo for any label, and data for measuring accuracy.
+- **A log of every decision.** A SQLite database (`inbox_agent.db`) records what the agent decided about each email and whether it added the label. So no email is processed (or paid for) twice, any run can be undone, and the log will feed the daily summary and accuracy tests.
+- **Dry run by default.** `triage.py` only changes Gmail when you add `--apply`. Running it without that is always safe.
+- **Gmail labels aren't folders.** An email is stored once, whatever its labels. "Inbox" is just another label, and archiving removes it. So labeling and archiving don't change storage. The point of archiving is a clear inbox, not saving space.
+- **Database migrations.** When the log gained an `archived` column, `database.py` adds it to existing database files automatically, instead of requiring the old log to be deleted.
 
 ## Progress log
 
@@ -117,6 +124,28 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 - **Learned:** keeping settings in a data file instead of in code, and the `.env` / `.env.example` pattern applied to personal data (a private file plus a shareable example).
 - **Idea:** triage sends the same system prompt with every email, so prompt caching (a discount for repeating the same text) could cut the cost. Worth checking whether the prompt is long enough to qualify.
 
+### Step 4c: Applying labels in Gmail
+- **Built:**
+  - `gmail_client.py`: `get_or_create_labels()` creates any missing labels in Gmail, `add_label()` and `remove_label()` change one email's labels, and each `Email` now knows which labels it already has.
+  - `database.py`: a SQLite log with one row per email: the decision, the reason, the cost, the run it belonged to, and whether the agent actually added the label.
+  - `triage.py --apply`: applies the labels and logs each decision, and skips emails that are already in the log. `undo.py` reverses the last run.
+- **Learned:** SQLite and SQL basics (`CREATE TABLE`, `INSERT`, `SELECT`, `DELETE`), why queries use `?` placeholders (to stop SQL injection), `argparse` for command-line options, and checking an action's real effect instead of trusting the script's own output.
+- **Result:**
+  - The first run created 10 new labels in Gmail and labeled the 10 newest emails, for $0.0035.
+  - A check read each email back from Gmail: 10 of 10 had their label, and all were still in the inbox.
+  - `undo.py` removed all 10 labels, which was again checked in Gmail, and relabeling put them back.
+  - A second run skipped all 10 emails as already sorted, without calling Claude.
+- **Found:**
+  - One Indeed job email didn't have my "Indeed Alerts" label, because my Gmail filter missed it. The agent added it. That's exactly the gap the agent is meant to fill.
+  - A bug: a run with nothing new still printed "to undo this run, run undo.py". That run records nothing, so undo would have reversed the run before it. Fixed: the hint only appears when a run changed something.
+
+### Step 4d: Archiving
+- **Decided:** archive emails once they're labeled, so the inbox works as a to-do list. Emails that need a reply or an action, and Unsorted emails, stay in the inbox.
+- **Built:** `change_labels()` in `gmail_client.py` adds and removes labels in one request. It replaced `add_label()` and `remove_label()`, because archiving is just removing the INBOX label. `triage.py --apply` now archives sorted emails (`ARCHIVE_SORTED_EMAILS` turns this off), the log records which emails were archived, and `undo.py` moves them back into the inbox.
+- **Learned:** Gmail labels aren't folders, so archiving doesn't change storage. The benefit is a clearer inbox. Also learned database migrations (`ALTER TABLE`), for adding a column to an existing database.
+- **Result:** undid the first 10 and re-sorted the 10 newest with archiving. 8 were labeled and archived. The 2 that still need me stayed in the inbox: a contract to sign and a LinkedIn message. A check in Gmail confirmed every label and inbox status.
+- **Also decided:** the two empty labels my old mail app created (`[Imap]/Drafts` and `Junk Email`) get deleted by hand in Gmail's settings, not by the agent. That way the agent's code still has no ability to delete anything.
+
 ## What's left
 
 - [x] **Step 1:** First call to Claude
@@ -125,16 +154,18 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 - [x] **Triage upgrade:** `needs_action` with what to do, and "Unsorted" with a suggested label name and description
 - [x] **Step 4a:** Label Designer reads my existing labels and inbox and suggests a label set
 - [x] **Step 4b:** review the suggestion, save the final labels in `labels.json` (kept out of Git, with a `labels.example.json` in the repo), and make triage read its labels from that file
-- [ ] **Step 4c:** apply labels in Gmail (this needs permission to change labels, so I'll sign in again) and log every decision in SQLite
+- [x] **Step 4c:** apply labels in Gmail and log every decision in SQLite, with undo
+- [x] **Step 4d:** archive sorted emails, except those that still need me
+- [ ] Delete the empty `[Imap]/Drafts` and `Junk Email` labels in Gmail's settings (by hand)
+- [ ] Sort the rest of the inbox in bigger batches, checking the results in Gmail along the way
 - [ ] **Step 5:** my own Gmail MCP server, with tools to read emails and save drafts but none to send or delete. Test it in Claude Desktop
 - [ ] **Step 6:** the Drafter agent and the Critic
-- [ ] **Step 7:** web page with a daily summary, to-do list, drafted replies and label suggestions, and a way to run the agent every day. Group to-dos that come from the same conversation
+- [ ] **Step 7:** web page with a daily summary, to-do list, drafted replies and label suggestions, and a way to run the agent every day. Group to-dos that come from the same conversation. A "done" button on a to-do should archive its email
 - [ ] **Step 8:** accuracy tests (evals), README polish and a demo video
 - [ ] **Cost:** try prompt caching for triage's system prompt, which is the same for every email
 
 **Open questions**
 - Should the daily run happen automatically each morning (Windows Task Scheduler) or when I open the web page?
-
 ## Project files
 
 | File | What it does |
@@ -145,10 +176,12 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 | `triage.py` | Step 3: sorts emails with Claude Haiku, flags replies and actions, suggests labels (dry run) |
 | `label_designer.py` | Step 4: Claude Opus suggests a label set from my inbox and existing labels |
 | `labels.example.json` | A shareable example label set. My real labels are in `labels.json`, which isn't in Git |
+| `database.py` | The agent's memory: a SQLite log of every email it handled and what it decided |
+| `undo.py` | Removes the labels added in the last `--apply` run |
 | `requirements.txt` | Python packages, with exact versions |
 | `.env.example` | Template for the API key file |
 
-Not in Git: `.env` (API key), `credentials.json` (Google app file), `token.json` (saved Gmail login), `labels_proposed.json` (label suggestions that quote my real emails), `labels.json` (my labels, whose descriptions name companies I applied to), `.venv/` (Python environment).
+Not in Git: `.env` (API key), `credentials.json` (Google app file), `token.json` (saved Gmail login), `labels_proposed.json` (label suggestions that quote my real emails), `labels.json` (my labels, whose descriptions name companies I applied to), `inbox_agent.db` (the log of my emails and decisions), `.venv/` (Python environment).
 
 ## Setup
 
@@ -165,3 +198,5 @@ Not in Git: `.env` (API key), `credentials.json` (Google app file), `token.json`
 6. Run `python show_inbox.py` to sign in to Gmail and list your 20 newest emails.
 7. Run `python triage.py` to see which label Claude would give each of your 20 newest emails, which ones need a reply or an action, and which fit no label. Add a number to sort more, for example `python triage.py 50`. Nothing in Gmail changes.
 8. Run `python label_designer.py` to have Claude Opus suggest a label set from your 200 newest inbox emails and your existing Gmail labels (about $0.30). It saves the suggestion to `labels_proposed.json`. Nothing in Gmail changes. Review it, then save the labels you want to keep as `labels.json`, in the same format as `labels.example.json`. Until you do, triage uses the example labels.
+9. Run `python triage.py 10 --apply` to sort emails in Gmail for real, starting small. It adds the labels, and archives each sorted email unless it needs a reply or an action or is Unsorted. Gmail asks you to sign in again the first time, because changing labels needs more permission than reading. Emails that are already sorted get skipped. To reverse the last run, use `python undo.py`.
+10. To look inside the log (`inbox_agent.db`) in VS Code, install the **SQLite Viewer** extension. The file is a database, not text, so VS Code can't open it on its own.

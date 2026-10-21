@@ -8,6 +8,9 @@ token.json
 labels_proposed.json
 labels.json
 
+# The agent's log of every email it handled (senders, subjects, decisions)
+inbox_agent.db
+
 # Python
 .venv/
 __pycache__/

@@ -21,9 +21,12 @@ PROJECT_DIR = Path(__file__).parent
 CREDENTIALS_FILE = PROJECT_DIR / "credentials.json"  # identifies this app to Google
 TOKEN_FILE = PROJECT_DIR / "token.json"  # your saved login, created after the first sign-in
 
-# What we ask Google permission to do. Read-only for now. When later steps need
-# to add labels and save drafts, we'll add permissions here and you'll sign in again.
-SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
+# What we ask Google permission to do. "gmail.modify" lets the app read emails,
+# create labels and change which labels an email has. It's the narrowest Google
+# permission that allows changing labels on emails, but it also covers drafts and
+# sending. So the real safety boundary is this file: it has no function that sends
+# or deletes anything. (Changing this list makes you sign in again.)
+SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
 
 
 @dataclass
@@ -35,6 +38,7 @@ class Email:
     subject: str
     date: datetime
     snippet: str  # the first line or so of the email body, as Gmail shows in the inbox
+    label_ids: list[str]  # the labels the email already has, including Gmail's own like INBOX
 
 
 def get_gmail_service():
@@ -73,6 +77,32 @@ def list_labels(service):
         for label in response.get("labels", [])
         if label["type"] == "user"
     ]
+
+
+def get_or_create_labels(service, names):
+    """Return {label name: label ID} for the given names, creating any that don't exist in Gmail yet."""
+    response = service.users().labels().list(userId="me").execute()
+    ids = {label["name"]: label["id"] for label in response.get("labels", [])}
+    for name in names:
+        if name not in ids:
+            created = service.users().labels().create(
+                userId="me",
+                body={"name": name, "labelListVisibility": "labelShow", "messageListVisibility": "show"},
+            ).execute()
+            ids[name] = created["id"]
+            print(f"Created label in Gmail: {name}")
+    return {name: ids[name] for name in names}
+
+
+def change_labels(service, message_id, add=(), remove=()):
+    """Add and/or remove labels on one email, in a single request.
+
+    Archiving in Gmail just means removing the INBOX label: the email stays in
+    All Mail and under its other labels, so nothing is lost and storage doesn't change.
+    """
+    service.users().messages().modify(
+        userId="me", id=message_id, body={"addLabelIds": list(add), "removeLabelIds": list(remove)}
+    ).execute()
 
 
 def _load_saved_login():
@@ -117,4 +147,5 @@ def _to_email(message):
         subject=headers.get("subject") or "(no subject)",
         date=datetime.fromtimestamp(int(message["internalDate"]) / 1000),
         snippet=html.unescape(message.get("snippet", "")),
+        label_ids=message.get("labelIds", []),
     )

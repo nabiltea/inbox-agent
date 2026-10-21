@@ -1,17 +1,19 @@
-"""Step 3: sort your newest emails into labels (dry run).
+"""Sort my newest emails into labels.
 
 Claude Haiku reads each email's sender, subject and preview. It picks a label,
 or "Unsorted" with a suggested new label when nothing fits, and flags emails
-that need a reply or an action from me. Nothing in Gmail changes yet: this
-script only prints what it would do.
+that need a reply or an action from me.
 
-Run it with:  python triage.py       (sorts the 20 newest emails)
-         or:  python triage.py 50    (sorts the 50 newest)
+Run it with:  python triage.py               dry run on the 20 newest emails: only prints
+              python triage.py 50            dry run on the 50 newest
+              python triage.py 10 --apply    applies the labels in Gmail and records each
+                                             decision. Undo with: python undo.py
 """
 
+import argparse
 import json
-import sys
 from collections import Counter
+from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
@@ -19,7 +21,8 @@ import anthropic
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 
-from gmail_client import get_gmail_service, list_recent_emails
+import database
+from gmail_client import change_labels, get_gmail_service, get_or_create_labels, list_recent_emails
 
 load_dotenv()
 
@@ -51,6 +54,11 @@ LABELS = load_labels()
 
 # Used when no label fits. These emails come with a suggested new label for me to approve.
 UNSORTED = "Unsorted"
+
+# With --apply, move sorted emails out of the inbox (archive them) so the inbox
+# only holds what still needs me. Archived emails stay under their label and in
+# All Mail. Set to False to only add labels.
+ARCHIVE_SORTED_EMAILS = True
 
 LABEL_LIST = "\n".join(f"- {name}: {description}" for name, description in LABELS.items())
 
@@ -115,6 +123,11 @@ def triage(client, email):
     )
 
 
+def should_archive(result):
+    """Archive a sorted email, unless it still needs me: a reply, an action, or a label decision."""
+    return not (result.needs_reply or result.needs_action or result.label == UNSORTED)
+
+
 def print_result(email, result):
     """Print one sorted email: label, flags and subject, then the details underneath."""
     flags = []
@@ -133,19 +146,38 @@ def print_result(email, result):
 
 
 def main():
-    # sys.argv holds what you typed after "python": ["triage.py"] or ["triage.py", "50"]
-    count = int(sys.argv[1]) if len(sys.argv) > 1 else 20
+    # argparse reads what you typed after "python triage.py", and gives a help
+    # message for free: try "python triage.py --help".
+    parser = argparse.ArgumentParser(description="Sort my newest emails into labels with Claude Haiku.")
+    parser.add_argument("count", nargs="?", type=int, default=20, help="how many of the newest inbox emails to sort (default 20)")
+    parser.add_argument("--apply", action="store_true", help="apply the labels in Gmail and record each decision. Without it, nothing changes.")
+    args = parser.parse_args()
 
     client = anthropic.Anthropic()
     service = get_gmail_service()
-    emails = list_recent_emails(service, max_results=count)
+    emails = list_recent_emails(service, max_results=args.count)
+
+    conn = None
+    if args.apply:
+        conn = database.connect()
+        label_ids = get_or_create_labels(service, [*LABELS, UNSORTED])
+        run_id = datetime.now().isoformat(timespec="seconds")
+        print(f"Applying labels in Gmail (run {run_id})\n")
+    else:
+        print("Dry run: nothing in Gmail changes\n")
 
     total_cost = 0.0
     results = []
+    archived_count = 0
     for email in emails:
+        if conn and database.is_processed(conn, email.id):
+            print(f"{'(already sorted)':<20}  {'':<12}  {email.subject[:60]}")
+            continue
+
         response = triage(client, email)
         usage = response.usage
-        total_cost += (usage.input_tokens * INPUT_PRICE + usage.output_tokens * OUTPUT_PRICE) / 1_000_000
+        cost = (usage.input_tokens * INPUT_PRICE + usage.output_tokens * OUTPUT_PRICE) / 1_000_000
+        total_cost += cost
 
         result = response.parsed_output
         if result is None:  # Claude declined, or the answer was cut off
@@ -154,6 +186,20 @@ def main():
         results.append(result)
         print_result(email, result)
 
+        if args.apply:
+            label_id = label_ids[result.label]
+            # If the email already has this label (for example from my own Gmail filter),
+            # leave it alone and note that, so undo won't remove a label the agent didn't add.
+            label_added = label_id not in email.label_ids
+            archived = ARCHIVE_SORTED_EMAILS and should_archive(result) and "INBOX" in email.label_ids
+            # Archiving means removing Gmail's INBOX label. Both changes go in one request.
+            add = [label_id] if label_added else []
+            remove = ["INBOX"] if archived else []
+            if add or remove:
+                change_labels(service, email.id, add=add, remove=remove)
+            archived_count += archived
+            database.save_decision(conn, run_id, email, result, label_added, archived, MODEL, cost)
+
     # Counter counts how often each label appears. sum() over True/False values counts the Trues.
     label_counts = Counter(result.label for result in results)
     print("\nSummary")
@@ -161,7 +207,14 @@ def main():
         print(f"  {label:<20} {number}")
     print(f"  Need a reply:        {sum(result.needs_reply for result in results)}")
     print(f"  Need an action:      {sum(result.needs_action for result in results)}")
-    print(f"\nSorted {len(emails)} emails for about ${total_cost:.4f}")
+    if args.apply:
+        print(f"  Archived:            {archived_count}")
+        print(f"  Left in inbox:       {len(results) - archived_count}")
+    print(f"\nSorted {len(results)} emails for about ${total_cost:.4f}")
+    # Only mention undo when this run actually changed something: an empty run
+    # records nothing, so undo.py would undo the run before it instead.
+    if args.apply and results:
+        print("Labels applied in Gmail. To undo this run: python undo.py")
 
 
 # Run main() only when this file is run directly, not when another file imports
