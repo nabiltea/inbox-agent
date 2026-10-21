@@ -45,10 +45,10 @@ def get_gmail_service():
     return build("gmail", "v1", credentials=creds)
 
 
-def list_recent_emails(service, max_results=20):
-    """Return the newest emails in the inbox, newest first."""
+def list_recent_emails(service, max_results=20, label_id="INBOX"):
+    """Return the newest emails with the given label (the inbox by default), newest first."""
     response = service.users().messages().list(
-        userId="me", labelIds=["INBOX"], maxResults=max_results
+        userId="me", labelIds=[label_id], maxResults=max_results
     ).execute()
 
     emails = []
@@ -62,6 +62,17 @@ def list_recent_emails(service, max_results=20):
         ).execute()
         emails.append(_to_email(message))
     return emails
+
+
+def list_labels(service):
+    """Return the labels I made myself in Gmail, as a list of {"id": ..., "name": ...}."""
+    response = service.users().labels().list(userId="me").execute()
+    # Gmail's built-in labels like INBOX and SPAM have type "system". The ones I made have type "user".
+    return [
+        {"id": label["id"], "name": label["name"]}
+        for label in response.get("labels", [])
+        if label["type"] == "user"
+    ]
 
 
 def _load_saved_login():

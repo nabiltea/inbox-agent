@@ -9,8 +9,10 @@ Run it with:  python triage.py       (sorts the 20 newest emails)
          or:  python triage.py 50    (sorts the 50 newest)
 """
 
+import json
 import sys
 from collections import Counter
+from pathlib import Path
 from typing import Literal
 
 import anthropic
@@ -29,17 +31,23 @@ MODEL = "claude-haiku-5-5"
 INPUT_PRICE = 0.10
 OUTPUT_PRICE = 0.50
 
-# A starter set of labels based on what's in the inbox right now. In Step 4, an
-# AI "Label Designer" will propose a better set after reading a few hundred emails.
-LABELS = {
-    "Job Applications": "Updates on jobs I applied for: application received, assessments, interviews, offers, rejections, contracts to sign.",
-    "Job Alerts": "Job recommendations and alerts for jobs I haven't applied to, from job sites like LinkedIn and Indeed.",
-    "Receipts & Bills": "Receipts, invoices, payment notices and subscription charges.",
-    "Orders & Deliveries": "Order confirmations and shipping or delivery updates.",
-    "Accounts & Security": "Sign-in links, verification codes, password resets and account notices.",
-    "Promotions": "Marketing emails, offers, vouchers and newsletters.",
-    "Personal": "Emails written to me personally by a real person.",
-}
+# My labels and their descriptions live in labels.json, which started from the
+# Label Designer's suggestion. It's kept out of Git because it's personal, so
+# anyone else running this project gets the shareable example labels instead.
+PROJECT_DIR = Path(__file__).parent
+LABELS_FILE = PROJECT_DIR / "labels.json"
+EXAMPLE_LABELS_FILE = PROJECT_DIR / "labels.example.json"
+
+
+def load_labels():
+    """Read the labels from labels.json, or from the example file if there's none yet."""
+    path = LABELS_FILE if LABELS_FILE.exists() else EXAMPLE_LABELS_FILE
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return {label["name"]: label["description"] for label in data["labels"]}
+
+
+# A dictionary of label name -> description, the same shape as before.
+LABELS = load_labels()
 
 # Used when no label fits. These emails come with a suggested new label for me to approve.
 UNSORTED = "Unsorted"

@@ -2,7 +2,7 @@
 
 An AI agent that organizes my Gmail. It sorts every email into labels, flags the emails that need a reply or an action from me, drafts replies, and shows everything on a web page with a daily summary. Several Claude models work together, each with its own job, and nothing is ever sent without my approval.
 
-**Status:** Steps 1 to 3 done, including the triage upgrade. The agent reads my inbox, sorts each email with Claude Haiku, flags what needs a reply or an action, and suggests new labels for emails that fit none. It's still a dry run that changes nothing in Gmail. Next: Step 4, labels.
+**Status:** Steps 1 to 3 done, including the triage upgrade. The agent reads my inbox, sorts each email with Claude Haiku, flags what needs a reply or an action, and suggests new labels for emails that fit none. It's still a dry run that changes nothing in Gmail. Step 4 is under way: the Label Designer suggested a label set, I reviewed it, and triage now sorts with those 11 labels. Next: applying the labels in Gmail.
 
 ## How it works
 
@@ -22,12 +22,12 @@ flowchart TD
     A --> W
 ```
 
-Built so far: `gmail_client.py` and Triage (dry run). Everything else is planned.
+Built so far: `gmail_client.py`, Triage (dry run) and the Label Designer. Everything else is planned.
 
 | Part | Model | Job |
 |---|---|---|
 | Triage | Claude Haiku 5.5 | Sorts each email, flags needs reply / needs action. Cheap and fast, because it runs on every email |
-| Label Designer (planned) | Claude Opus 5.5 | Reads many emails and suggests labels with descriptions |
+| Label Designer | Claude Opus 5.5 | Reads a few hundred emails and my existing labels, and suggests labels with descriptions. Runs rarely, so the best model is worth the cost |
 | Drafter (planned) | Claude Sonnet 5.5 | An agent that looks up past emails with tools, then writes a reply |
 | Critic (planned) | Claude Opus 5.5 | Checks each draft for made-up facts, promises I never made and wrong tone, and sends it back for changes |
 
@@ -54,6 +54,7 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 - **Least privilege.** The app asks Google only for the permissions the current step needs. Right now that's read-only.
 - **Secrets stay out of Git.** The API key (`.env`), the Google app file (`credentials.json`) and my saved login (`token.json`) are all in `.gitignore`.
 - **Less data sent to the model.** Triage sends only the sender, subject and preview, not the full email.
+- **Personal data stays out of Git.** The Label Designer's suggestions quote subjects from my real emails, and its label descriptions name companies I applied to, so `labels_proposed.json` is in `.gitignore`. The final label file will be handled the same way, with a shareable example file in the repo instead.
 
 ### Engineering choices
 
@@ -63,6 +64,7 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 - **Gmail code separate from AI code.** All Gmail code is in `gmail_client.py`. That keeps the AI code simple, and it's what will become my Gmail MCP server.
 - **My own MCP server instead of a ready-made one.** Community Gmail MCP servers usually include send and delete, and would mean trusting someone else's code with my inbox. My own server only has the tools I choose, and it also works in Claude Desktop.
 - **Gmail filters and the agent work together.** My filters already sort job alerts by sender address. The agent catches the ones the filters miss by recognizing what an email is, not just who sent it.
+- **Facts come from code, judgment comes from the model.** Anything the code can check for itself (like whether a label already exists in Gmail) is computed in code, not asked of the model. The model is only used for decisions that need judgment.
 - **Label descriptions are the prompt.** The model only knows what a label means from its description, so fixing wrong labels usually means rewriting descriptions.
 - **A log of every decision (planned).** A SQLite database will record what the agent did to each email. It means no email is processed twice, and it provides the daily summary, an undo for any label, and data for measuring accuracy.
 
@@ -94,20 +96,43 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - LinkedIn sent five separate notifications for the same conversation, which gave five identical to-dos. The web page should group to-dos from the same conversation.
   - Career newsletters are still split between "Job Alerts" and "Promotions". That gets fixed with label descriptions in Step 4.
 
+### Step 4a: Label Designer
+- **Built:** `label_designer.py` reads the 200 newest inbox emails plus 5 examples from each label I made in Gmail, and asks Claude Opus 5.5 (effort high) to design a label set. It saves the suggestion to `labels_proposed.json` for me to review, and prints it with example emails for each label and notes on decisions I should check. `gmail_client.py` gained `list_labels()`, and `list_recent_emails()` can now read any label, not just the inbox.
+- **Learned:** streaming (receiving a long answer piece by piece so the connection doesn't time out), giving each email a number so the model can point to examples instead of copying them, and asking the model to list its own uncertain decisions.
+- **Result:** 12 suggested labels for $0.32, read from 210 emails. They include my LinkedIn and Indeed alert labels, plus Applications, LinkedIn Updates, University, Events, Orders & Payments, Security & Logins, Promotions and a "Job Alerts" label for other job boards. The descriptions are specific: they name typical senders and say where borderline emails go, such as career newsletters and job-application login codes.
+- **Found:**
+  - **The model got a fact wrong.** It marked "Job Alerts" as one of my existing labels, but no such label exists. Fix: the code now checks this itself against the real Gmail labels.
+  - **Labels made by a mail app.** Gmail has two labels I didn't make myself, `[Imap]/Drafts` and `Junk Email`, probably created when my Gmail was connected to a mail app like Outlook. Both are empty. Because the prompt said to keep every existing label, the model invented new meanings for them. They should be left out.
+  - **No "Personal" label.** The sample had almost no emails from real people, so the model didn't create one. But emails from real people are rare and important, so a Personal label is probably still worth having.
+  - **The descriptions contain personal details:** companies I applied to and a recruiter's name. That's why the label files stay out of Git.
+
+### Step 4b: Final labels, and triage uses them
+- **Decided:** left out `[Imap]/Drafts` and `Junk Email`, so voucher mail goes to Promotions. Kept a separate "Job Alerts" label for job boards other than LinkedIn and Indeed. Kept LinkedIn messages from real people in "LinkedIn Updates", because they already appear on the to-do list. Added a "Personal" label for emails from people I know.
+- **Built:** `labels.json` holds my 11 final labels with their descriptions. It's kept out of Git, and `labels.example.json` is a shareable version with generic descriptions. `triage.py` now reads its labels from `labels.json`, or from the example file if there's none yet, so nothing about my labels is hard-coded anymore.
+- **Result:** on the 50 newest emails:
+  - **No email went to Unsorted.** In the last run, two did, and both now have a label (University, and LinkedIn Updates).
+  - **Career newsletters are now consistent.** Each one follows the rule in its label's description: LinkedIn's goes to LinkedIn Updates, Indeed's tips go to Indeed Alerts, and the university career portal goes to University.
+  - **All 8 actions were found again:** 3 contract-signing emails and 5 LinkedIn messages.
+  - **Cost:** $0.0173, or about 35 cents per 1,000 emails. That's up from 22 cents, because the longer label descriptions are sent with every email.
+- **Learned:** keeping settings in a data file instead of in code, and the `.env` / `.env.example` pattern applied to personal data (a private file plus a shareable example).
+- **Idea:** triage sends the same system prompt with every email, so prompt caching (a discount for repeating the same text) could cut the cost. Worth checking whether the prompt is long enough to qualify.
+
 ## What's left
 
 - [x] **Step 1:** First call to Claude
 - [x] **Step 2:** Connect to Gmail
 - [x] **Step 3:** Triage (dry run)
 - [x] **Triage upgrade:** `needs_action` with what to do, and "Unsorted" with a suggested label name and description
-- [ ] **Step 4, labels:** read my existing Gmail labels (including my Indeed and LinkedIn Job Alerts filters), move labels and descriptions into `labels.json`, have the Label Designer suggest a starting set, then apply labels in Gmail and log every decision in SQLite
+- [x] **Step 4a:** Label Designer reads my existing labels and inbox and suggests a label set
+- [x] **Step 4b:** review the suggestion, save the final labels in `labels.json` (kept out of Git, with a `labels.example.json` in the repo), and make triage read its labels from that file
+- [ ] **Step 4c:** apply labels in Gmail (this needs permission to change labels, so I'll sign in again) and log every decision in SQLite
 - [ ] **Step 5:** my own Gmail MCP server, with tools to read emails and save drafts but none to send or delete. Test it in Claude Desktop
 - [ ] **Step 6:** the Drafter agent and the Critic
 - [ ] **Step 7:** web page with a daily summary, to-do list, drafted replies and label suggestions, and a way to run the agent every day. Group to-dos that come from the same conversation
 - [ ] **Step 8:** accuracy tests (evals), README polish and a demo video
+- [ ] **Cost:** try prompt caching for triage's system prompt, which is the same for every email
 
 **Open questions**
-- Where should LinkedIn and Indeed emails that aren't job alerts go (career newsletters, "who viewed your profile", post reactions, message notifications)? Right now LinkedIn message notifications go to "Personal", even though they're automated.
 - Should the daily run happen automatically each morning (Windows Task Scheduler) or when I open the web page?
 
 ## Project files
@@ -118,10 +143,12 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 | `gmail_client.py` | All Gmail code: login, fetch emails |
 | `show_inbox.py` | Step 2: prints the 20 newest inbox emails |
 | `triage.py` | Step 3: sorts emails with Claude Haiku, flags replies and actions, suggests labels (dry run) |
+| `label_designer.py` | Step 4: Claude Opus suggests a label set from my inbox and existing labels |
+| `labels.example.json` | A shareable example label set. My real labels are in `labels.json`, which isn't in Git |
 | `requirements.txt` | Python packages, with exact versions |
 | `.env.example` | Template for the API key file |
 
-Not in Git: `.env` (API key), `credentials.json` (Google app file), `token.json` (saved Gmail login), `.venv/` (Python environment).
+Not in Git: `.env` (API key), `credentials.json` (Google app file), `token.json` (saved Gmail login), `labels_proposed.json` (label suggestions that quote my real emails), `labels.json` (my labels, whose descriptions name companies I applied to), `.venv/` (Python environment).
 
 ## Setup
 
@@ -137,3 +164,4 @@ Not in Git: `.env` (API key), `credentials.json` (Google app file), `token.json`
 5. Run `python hello_claude.py` to check the Claude connection.
 6. Run `python show_inbox.py` to sign in to Gmail and list your 20 newest emails.
 7. Run `python triage.py` to see which label Claude would give each of your 20 newest emails, which ones need a reply or an action, and which fit no label. Add a number to sort more, for example `python triage.py 50`. Nothing in Gmail changes.
+8. Run `python label_designer.py` to have Claude Opus suggest a label set from your 200 newest inbox emails and your existing Gmail labels (about $0.30). It saves the suggestion to `labels_proposed.json`. Nothing in Gmail changes. Review it, then save the labels you want to keep as `labels.json`, in the same format as `labels.example.json`. Until you do, triage uses the example labels.

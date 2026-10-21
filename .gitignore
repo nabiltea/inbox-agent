@@ -3,6 +3,11 @@
 credentials.json
 token.json
 
+# Personal data: label suggestions quote subjects from my real emails, and my
+# label descriptions name companies I applied to. labels.example.json is shared instead.
+labels_proposed.json
+labels.json
+
 # Python
 .venv/
 __pycache__/

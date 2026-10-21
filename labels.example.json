@@ -1,0 +1,36 @@
+{
+  "labels": [
+    {
+      "name": "Personal",
+      "description": "Emails written to me personally by someone I know, such as friends, family or classmates, sent directly by email. Notifications that someone messaged me on another site go to that site's label, and emails about a job application I submitted go to Applications."
+    },
+    {
+      "name": "Applications",
+      "description": "Emails about specific job applications I submitted: application received, assessments, interviews, offers, rejections, candidate account codes and contracts to sign. Typical senders are company recruiting systems such as Workday or Greenhouse."
+    },
+    {
+      "name": "Job Alerts",
+      "description": "Job recommendations and job alerts from job sites like LinkedIn and Indeed, for jobs I haven't applied to. Updates on a job I applied for go to Applications."
+    },
+    {
+      "name": "Social Notifications",
+      "description": "Notifications from social networks that aren't job alerts: messages, connection requests, profile views, post reactions and career-advice newsletters."
+    },
+    {
+      "name": "Events",
+      "description": "Events I registered for or bought tickets to: confirmations, reminders and changes. Invitations to events I didn't sign up for go to Promotions."
+    },
+    {
+      "name": "Orders & Payments",
+      "description": "Order confirmations, shipping and delivery updates, receipts, invoices, payment notices and subscription charges. Pure sales offers go to Promotions."
+    },
+    {
+      "name": "Security & Logins",
+      "description": "Sign-in links, one-time login or verification codes, password resets and security alerts. Codes requested as part of a job application go to Applications."
+    },
+    {
+      "name": "Promotions",
+      "description": "Marketing newsletters, offers, vouchers and webinar invitations from brands and services."
+    }
+  ]
+}
