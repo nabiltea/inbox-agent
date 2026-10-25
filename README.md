@@ -2,7 +2,7 @@
 
 An AI agent that organizes my Gmail. It sorts every email into labels, flags the emails that need a reply or an action from me, drafts replies, and shows everything on a web page with a daily summary. Several Claude models work together, each with its own job, and nothing is ever sent without my approval.
 
-**Status:** Steps 1 to 4 done. The agent sorts each email into one of 15 labels designed by Claude Opus and reviewed by me, flags what needs a reply or an action, and suggests new labels for emails that fit none. It adds the labels in Gmail and archives sorted emails, so the inbox only holds what still needs me. It records every decision in a database, so it never sorts the same email twice and any run can be undone. **It sorted my whole backlog with the Message Batches API: 6,547 emails for $1.54, taking the inbox from 6,494 emails to 60.** Next: Step 5, my own Gmail MCP server.
+**Status:** Steps 1 to 4 done. The agent sorts each email into one of 15 labels designed by Claude Opus and reviewed by me, flags what needs a reply or an action, and suggests new labels for emails that fit none. It adds the labels in Gmail and archives sorted emails, so the inbox only holds what still needs me. It records every decision in a database, so it never sorts the same email twice and any run can be undone. **It sorted my whole backlog with the Message Batches API: 6,547 emails for $1.54, taking the inbox from 6,494 emails to 60.** Step 5 is built: my own Gmail MCP server, whose tools can search and read emails, list my to-dos and save reply drafts, but never send, delete or archive. Next: try it in Claude Desktop, then Step 6, the Drafter agent.
 
 ## How it works
 
@@ -22,7 +22,43 @@ flowchart TD
     A --> W
 ```
 
-Built so far: `gmail_client.py`, Triage (including applying labels in Gmail), the Label Designer and the SQLite log. Everything else is planned.
+Built so far: `gmail_client.py`, Triage (including applying labels in Gmail), the Label Designer, the SQLite log, the backlog sorter and the Gmail MCP server. The Drafter, the Critic and the web page are planned.
+
+### The Gmail MCP server's tools
+
+| Tool | What it does | Can change Gmail? |
+|---|---|---|
+| `search_emails` | Searches all mail with Gmail's search syntax, and returns sender, subject, date, preview and labels | No |
+| `read_thread` | Returns a whole conversation: each message's sender, recipients, date and text | No |
+| `list_todos` | Recent emails the agent flagged as needing a reply or an action that are still in the inbox | No |
+| `create_reply_draft` | Saves a reply inside a conversation as a draft. It is never sent | Only adds a draft |
+
+There is deliberately no tool to send, delete, archive or relabel anything.
+
+### How the MCP server works
+
+**Three layers.** `gmail_client.py` holds everything that talks to Gmail, and my own scripts use all of it, including the functions that change labels. `gmail_mcp_server.py` is the menu offered to AI apps: it picks the safe abilities, describes them for a model and leaves the rest out. The model itself (Claude) only reads and writes text. When it wants a tool, it asks the app it runs in, and the app makes the call. The model never talks to the server directly.
+
+```
+You ──▶ App (Claude Desktop) ──▶ Model (Claude): "call list_todos"
+              │
+              ▼
+        gmail_mcp_server.py ──▶ Gmail + my database
+              │
+              ▼
+        App ──▶ Model: "here's the result" ──▶ answer to me
+```
+
+**stdin, stdout and stderr.** The app starts the server in the background and connects to its three standard channels:
+
+```
+App                                   gmail_mcp_server.py
+ │ ── stdin:  requests (JSON) ─────────▶ │
+ │ ◀─ stdout: answers (JSON) ─────────── │
+ │ ◀─ stderr: plain text for humans ──── │  → saved to a log, never read as JSON
+```
+
+stdin and stdout carry the conversation as JSON messages: the handshake, the list of tools, then each tool call and its answer. stderr is a side channel for warnings and errors, which the app stores in a log. That's why the code never prints to stdout: a stray message there would be read as JSON and break the connection.
 
 | Part | Model | Job |
 |---|---|---|
@@ -58,6 +94,7 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 - **Start small and check.** The first real run labeled only 10 emails. A separate check read the labels back from Gmail, rather than trusting the script's own output. Undo was tested the same way before relabeling.
 - **Secrets stay out of Git.** The API key (`.env`), the Google app file (`credentials.json`) and my saved login (`token.json`) are all in `.gitignore`.
 - **Less data sent to the model.** Triage sends only the sender, subject and preview, not the full email.
+- **The MCP server is safe by construction.** Its tools can only read and save drafts. Each tool is marked with MCP annotations (`read_only_hint`, `destructive_hint`), so apps know which ones change something and can ask before using them. The server also tells every app that email content is untrusted, and to treat it as information, never as instructions.
 - **Personal data stays out of Git.** The Label Designer's suggestions quote subjects from my real emails, and its label descriptions name companies I applied to, so `labels_proposed.json` is in `.gitignore`. The final label file will be handled the same way, with a shareable example file in the repo instead.
 
 ### Engineering choices
@@ -73,6 +110,8 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 - **A log of every decision.** A SQLite database (`inbox_agent.db`) records what the agent decided about each email and whether it added the label. So no email is processed (or paid for) twice, any run can be undone, and the log will feed the daily summary and accuracy tests.
 - **Dry run by default.** `triage.py` only changes Gmail when you add `--apply`. Running it without that is always safe.
 - **To-dos only for recent emails.** Emails older than 30 days are archived even if flagged as needing a reply or an action, because they've been dealt with. The flags are still logged, as test data for the model.
+- **stdout belongs to MCP.** An MCP server talks to its app over stdin/stdout, so any stray `print()` would break the connection. All messages in `gmail_client.py` go to stderr instead. The server also never opens a browser to sign in, because nobody would see it. If the Gmail login has expired, the tool says so, and I sign in by running a script.
+- **One Gmail request at a time in the server.** Apps can call several tools at once, each on its own thread, but Google's client library isn't safe to use from two threads at once. A lock makes the tools take turns.
 - **Bulk where it pays.** Fetching emails uses Gmail batch requests (50 at a time). The 6,500-email backlog will use Claude's Message Batches API (half price, results within hours), while the daily run stays one email at a time, since that's only a few emails.
 - **Gmail labels aren't folders.** An email is stored once, whatever its labels. "Inbox" is just another label, and archiving removes it. So labeling and archiving don't change storage. The point of archiving is a clear inbox, not saving space.
 - **Database migrations.** When the log gained an `archived` column, `database.py` adds it to existing database files automatically, instead of requiring the old log to be deleted.
@@ -193,6 +232,30 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - **Only 45 emails (0.7%) went to Unsorted.**
   - Across all ages, the model flagged 751 emails as needing an action and 179 as needing a reply. They were archived anyway if older than 30 days. They're test data for checking the model's judgment later.
 
+### Step 4h: Re-sorting the first emails
+- **Built:** `undo.py --list` shows every run, and `undo.py --run RUN_ID` undoes any one of them, not just the last.
+- **Result:** undid the two runs from before the 4 new labels existed (58 emails), then ran `python triage.py 150 --apply`. It re-sorted those 58, plus 30 new emails, for $0.04. A flight itinerary moved from Orders & Payments to Travel.
+- **Decided:** not to add labels for the 45 Unsorted emails. Most of them fit an existing label in an ambiguous way, or need personal context to sort. The web page will make it easy to change an email's label by hand instead.
+- **Found:** triage flagged an appointment as a to-do two days after it had passed, because it doesn't know today's date. Fix (to do): give triage today's date and each email's date.
+
+### Step 5: My own Gmail MCP server
+- **Built:**
+  - `gmail_mcp_server.py` uses the official MCP Python SDK (version 2) to offer 4 tools: `search_emails`, `read_thread`, `list_todos` and `create_reply_draft`. Each tool's docstring becomes the description the model reads, and its type hints become the input schema. Annotations mark the read-only tools, and server-wide instructions warn the model that email content is untrusted.
+  - `gmail_client.py` gained:
+    - `get_thread()`, which reads a whole conversation. It walks each email's tree of parts, prefers the plain text, and falls back to HTML with the tags stripped.
+    - `create_reply_draft()` and `build_reply()`, which reply to the newest message from someone else, with the `In-Reply-To` and `References` headers that keep the reply inside the conversation.
+    - `get_my_address()`, plus searching all mail rather than only one label.
+  - `check_mcp_server.py` starts the server the way an app would, lists its tools and tries the read-only ones. The Drafter in Step 6 will connect the same way.
+- **Learned:** what an MCP server actually is (a program that describes its tools and answers calls over a standard protocol), the stdio transport, tool annotations, how email bodies are stored (MIME parts in base64url encoding), and how email apps link replies to conversations.
+- **Result:**
+  - The check started the server, which offered all 4 tools with the right read-only markings.
+  - `search_emails` found inbox emails with their label names, `list_todos` returned 17 to-dos (such as signing a contract and verifying a booking), and `read_thread` returned a full message.
+  - A separate test read a real 4-message conversation and built a reply (without saving it) that goes to the other person, with the right headers.
+- **Found:**
+  - **The SDK had changed.** In version 2 of the MCP Python SDK, the `FastMCP` class from most tutorials is called `MCPServer`, and the client API changed. Reading the migration guide and the installed code, rather than guessing, got it right the first time.
+  - **Structured answers need precise types.** A tool declared as returning plain `dict` sent its answer as text instead of structured data. Declaring `dict[str, Any]` fixed it.
+  - **The to-do list shows the past-dates bug from Step 4h:** an appointment from two days ago is still listed.
+
 ## What's left
 
 - [x] **Step 1:** First call to Claude
@@ -210,10 +273,11 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 - [x] Dry run on 40 random older emails with the new labels
 - [x] Sort the backlog with the Message Batches API: 6,489 emails in two batches, inbox down from 6,494 to 60
 - [x] Re-sort the first 58 emails, which were sorted before the 4 new labels existed
-- [ ] Review the 45 Unsorted emails with the Label Designer's help, and decide whether any new labels are worth adding
-- [ ] **Step 5:** my own Gmail MCP server, with tools to read emails and save drafts but none to send or delete. Test it in Claude Desktop
+- [ ] Give triage today's date and each email's date, so it doesn't flag past appointments and deadlines as to-dos
+- [x] **Step 5:** my own Gmail MCP server, with tools to search and read emails, list to-dos and save drafts, but none to send, delete or archive
+- [ ] Try the MCP server in Claude Desktop, including saving one draft
 - [ ] **Step 6:** the Drafter agent and the Critic
-- [ ] **Step 7:** web page with a daily summary, to-do list, drafted replies and label suggestions, and a way to run the agent every day. Group to-dos that come from the same conversation. A "done" button on a to-do should archive its email
+- [ ] **Step 7:** web page with a daily summary, to-do list, drafted replies and label suggestions, and a way to run the agent every day. Group to-dos that come from the same conversation. A "done" button on a to-do should archive its email. Make it easy to change an email's label by hand, especially for Unsorted emails
 - [ ] **Step 8:** accuracy tests (evals), README polish and a demo video
 - [ ] **Cost:** try prompt caching for triage's system prompt, which is the same for every email
 
@@ -233,6 +297,8 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 | `database.py` | The agent's memory: a SQLite log of every email it handled and what it decided |
 | `undo.py` | Reverses the last run (`triage.py --apply` or `backlog.py apply`): removes the labels it added and moves archived emails back into the inbox |
 | `backlog.py` | Sorts the whole inbox backlog with Claude's Message Batches API: `sample`, `submit`, `wait`, `apply` |
+| `gmail_mcp_server.py` | My Gmail MCP server: search, read threads, list to-dos, save reply drafts. No send, delete or archive |
+| `check_mcp_server.py` | Starts the MCP server the way an app would, lists its tools and tries the read-only ones |
 | `requirements.txt` | Python packages, with exact versions |
 | `.env.example` | Template for the API key file |
 
@@ -255,4 +321,5 @@ Not in Git: `.env` (API key), `credentials.json` (Google app file), `token.json`
 8. Run `python label_designer.py` to have Claude Opus suggest a label set from 200 random inbox emails from the last 5 years, plus your current labels (about $0.40). If you already have a `labels.json`, it improves those labels instead of starting over. It saves the suggestion to `labels_proposed.json`. Nothing in Gmail changes. Review it, then save the labels you want to keep as `labels.json`, in the same format as `labels.example.json`. Until you do, triage uses the example labels.
 9. Run `python triage.py 10 --apply` to sort emails in Gmail for real, starting small. It adds the labels, and archives each sorted email unless it needs a reply or an action or is Unsorted. Gmail asks you to sign in again the first time, because changing labels needs more permission than reading. Emails that are already sorted get skipped. To reverse the last run, use `python undo.py`.
 10. To sort a large backlog at half price, use `python backlog.py sample 40` to check the labels on a random sample first. Then run `python backlog.py submit`, `python backlog.py wait` (usually under an hour) and `python backlog.py apply`. Each `apply` is one run that `python undo.py` can reverse.
-11. To look inside the log (`inbox_agent.db`) in VS Code, install the **SQLite Viewer** extension. The file is a database, not text, so VS Code can't open it on its own.
+11. To look inside the log (`inbox_agent.db`) in VS Code, install the **SQLite Viewer** extension.
+12. Run `python check_mcp_server.py` to check the Gmail MCP server. To use it in Claude Desktop, add an `mcpServers` section to Claude Desktop's `claude_desktop_config.json`, keeping everything already in the file. The server's `command` is the full path to `.venv\Scripts\python.exe`, and its `args` is the full path to `gmail_mcp_server.py`. Then quit and reopen Claude Desktop. **Settings → Developer → Edit Config** shows where the file is. The Microsoft Store version of Claude keeps it in `%LOCALAPPDATA%\Claude-Data\<app folder>\`, not `%APPDATA%\Claude\` as many guides say. The file is a database, not text, so VS Code can't open it on its own.

@@ -1,14 +1,22 @@
 """Everything that talks to Gmail lives in this file.
 
 The rest of the project calls these functions and never deals with Google's
-login or API details directly. In a later step we'll wrap these same
-functions in an MCP server.
+login or API details directly. gmail_mcp_server.py offers some of them to AI
+apps as MCP tools.
+
+Messages for the person running a script go to stderr (print(..., file=sys.stderr)),
+never stdout: an MCP server uses stdout to talk to the app, and any stray text
+there would break the conversation.
 """
 
+import base64
 import html
+import re
+import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime
+from email.message import EmailMessage
 from email.utils import parseaddr
 from pathlib import Path
 
@@ -42,12 +50,20 @@ class Email:
     label_ids: list[str]  # the labels the email already has, including Gmail's own like INBOX
 
 
-def get_gmail_service():
-    """Log in to Gmail and return an object for making Gmail API calls."""
+def get_gmail_service(allow_browser_sign_in=True):
+    """Log in to Gmail and return an object for making Gmail API calls.
+
+    If the saved login doesn't work, this opens a browser to sign in again, unless
+    allow_browser_sign_in is False. The MCP server runs in the background, where
+    nobody would see the browser, so it asks you to sign in from a script instead.
+    """
     creds = _load_saved_login()
     if creds is None:
+        if not allow_browser_sign_in:
+            raise RuntimeError("The Gmail login has expired. Run 'python show_inbox.py' once to sign in again.")
         creds = _sign_in()
-    return build("gmail", "v1", credentials=creds)
+    # cache_discovery=False switches off a cache this setup doesn't support (and its warning).
+    return build("gmail", "v1", credentials=creds, cache_discovery=False)
 
 
 def list_recent_emails(service, max_results=20, label_id="INBOX"):
@@ -57,7 +73,7 @@ def list_recent_emails(service, max_results=20, label_id="INBOX"):
 
 
 def list_message_ids(service, label_id="INBOX", query=None, max_results=None):
-    """Return the IDs of emails with the given label, newest first.
+    """Return the IDs of emails with the given label, newest first. label_id=None searches all mail.
 
     query uses Gmail's search syntax, for example "after:2021/10/22". Gmail returns
     at most 500 IDs per request, so this keeps asking for the next "page" of results
@@ -68,7 +84,11 @@ def list_message_ids(service, label_id="INBOX", query=None, max_results=None):
     while True:
         page_size = 500 if max_results is None else min(500, max_results - len(ids))
         response = service.users().messages().list(
-            userId="me", labelIds=[label_id], q=query, maxResults=page_size, pageToken=page_token
+            userId="me",
+            labelIds=[label_id] if label_id else None,
+            q=query,
+            maxResults=page_size,
+            pageToken=page_token,
         ).execute()
         ids += [item["id"] for item in response.get("messages", [])]
         page_token = response.get("nextPageToken")  # None when there are no more pages
@@ -118,11 +138,11 @@ def get_emails(service, message_ids):
             to_fetch = []  # the loop got through every bundle without a refusal
         if not to_fetch:
             break
-        print(f"Gmail's per-minute limit reached after {len(found)} emails. Waiting a minute...", flush=True)
+        print(f"Gmail's per-minute limit reached after {len(found)} emails. Waiting a minute...", file=sys.stderr, flush=True)
         time.sleep(60)
 
     if to_fetch or skipped:
-        print(f"Couldn't fetch {len(to_fetch) + len(skipped)} emails from Gmail. They're skipped this time.")
+        print(f"Couldn't fetch {len(to_fetch) + len(skipped)} emails from Gmail. They're skipped this time.", file=sys.stderr)
     return [found[message_id] for message_id in message_ids if message_id in found]
 
 
@@ -155,7 +175,7 @@ def get_or_create_labels(service, names):
                 body={"name": name, "labelListVisibility": "labelShow", "messageListVisibility": "show"},
             ).execute()
             ids[name] = created["id"]
-            print(f"Created label in Gmail: {name}")
+            print(f"Created label in Gmail: {name}", file=sys.stderr)
     return {name: ids[name] for name in names}
 
 
@@ -177,6 +197,77 @@ def change_labels_bulk(service, message_ids, add=(), remove=()):
             userId="me",
             body={"ids": message_ids[start:start + 1000], "addLabelIds": list(add), "removeLabelIds": list(remove)},
         ).execute()
+
+
+def get_my_address(service):
+    """My own email address."""
+    return service.users().getProfile(userId="me").execute()["emailAddress"]
+
+
+def get_thread(service, thread_id, max_chars_per_message=4000):
+    """Return a whole conversation: its subject, and each message's sender, recipients, date and text.
+
+    Long messages are cut to max_chars_per_message characters, mostly to drop the
+    quoted copies of earlier messages that replies tend to repeat at the bottom.
+    """
+    thread = service.users().threads().get(userId="me", id=thread_id, format="full").execute()
+    messages = []
+    for message in thread["messages"]:
+        headers = _headers(message)
+        body = _extract_body(message["payload"])
+        if len(body) > max_chars_per_message:
+            body = body[:max_chars_per_message] + "\n[... cut off ...]"
+        messages.append({
+            "id": message["id"],
+            "from": headers.get("from", ""),
+            "to": headers.get("to", ""),
+            "date": datetime.fromtimestamp(int(message["internalDate"]) / 1000).isoformat(timespec="minutes"),
+            "body": body,
+        })
+    subject = _headers(thread["messages"][0]).get("subject", "(no subject)")
+    return {"thread_id": thread_id, "subject": subject, "messages": messages}
+
+
+def create_reply_draft(service, thread_id, body):
+    """Save a reply to a conversation as a draft. It's never sent: I review and send drafts myself."""
+    thread = service.users().threads().get(
+        userId="me", id=thread_id, format="metadata",
+        metadataHeaders=["From", "To", "Reply-To", "Subject", "Message-ID", "References"],
+    ).execute()
+    reply = build_reply(thread["messages"], get_my_address(service), body)
+    raw = base64.urlsafe_b64encode(reply.as_bytes()).decode()
+    draft = service.users().drafts().create(
+        userId="me", body={"message": {"raw": raw, "threadId": thread_id}}
+    ).execute()
+    return {"draft_id": draft["id"], "to": reply["To"], "subject": reply["Subject"]}
+
+
+def build_reply(messages, my_address, body):
+    """Build a reply to the newest message in a conversation that someone else sent.
+
+    The In-Reply-To and References headers tell email apps which message this
+    answers, so the reply shows up inside the same conversation.
+    """
+    others = [m for m in messages if my_address.lower() not in _headers(m).get("from", "").lower()]
+    if others:
+        headers = _headers(others[-1])
+        to = headers.get("reply-to") or headers.get("from", "")
+    else:  # every message is mine, so write to the person I wrote to
+        headers = _headers(messages[-1])
+        to = headers.get("to", "")
+
+    subject = headers.get("subject", "")
+    if not subject.lower().startswith("re:"):
+        subject = f"Re: {subject}"
+
+    reply = EmailMessage()
+    reply["To"] = to
+    reply["Subject"] = subject
+    if headers.get("message-id"):
+        reply["In-Reply-To"] = headers["message-id"]
+        reply["References"] = f"{headers.get('references', '')} {headers['message-id']}".strip()
+    reply.set_content(body)
+    return reply
 
 
 def _load_saved_login():
@@ -209,9 +300,48 @@ def _sign_in():
     return creds
 
 
+def _headers(message):
+    """A message's headers as a dictionary with lowercase names, like {"from": ..., "subject": ...}."""
+    return {h["name"].lower(): h["value"] for h in message["payload"].get("headers", [])}
+
+
+def _extract_body(payload):
+    """Find the readable text of an email: plain text if there is any, otherwise HTML with the tags removed.
+
+    An email is a tree of parts (plain text, HTML, attachments, parts inside parts),
+    so this walks the whole tree.
+    """
+    plain, html_parts = [], []
+
+    def walk(part):
+        data = part.get("body", {}).get("data")
+        if data and part.get("mimeType") == "text/plain":
+            plain.append(_decode(data))
+        elif data and part.get("mimeType") == "text/html":
+            html_parts.append(_decode(data))
+        for child in part.get("parts", []):
+            walk(child)
+
+    walk(payload)
+    if plain:
+        return "\n".join(plain).strip()
+    text = "\n".join(html_parts)
+    text = re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", text, flags=re.S | re.I)  # drop code and styling
+    text = re.sub(r"<br\s*/?>|</p>|</div>|</tr>", "\n", text, flags=re.I)  # keep line breaks
+    text = html.unescape(re.sub(r"<[^>]+>", " ", text))  # drop the remaining tags
+    text = re.sub(r"[ \t]+", " ", text)
+    return re.sub(r"\s*\n\s*", "\n", text).strip()
+
+
+def _decode(data):
+    """Gmail sends email text in "base64url" encoding. Turn it back into normal text."""
+    padded = data + "=" * (-len(data) % 4)
+    return base64.urlsafe_b64decode(padded).decode("utf-8", errors="replace")
+
+
 def _to_email(message):
     """Turn Gmail's raw message data into our simpler Email object."""
-    headers = {h["name"].lower(): h["value"] for h in message["payload"]["headers"]}
+    headers = _headers(message)
     name, address = parseaddr(headers.get("from", ""))
     return Email(
         id=message["id"],

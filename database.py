@@ -83,12 +83,32 @@ def save_decision(conn, run_id, email, result, label_added, archived, model, cos
     conn.commit()  # save to the file now, so a crash halfway through a run loses nothing
 
 
+def recent_todos(conn, since):
+    """Emails received since the given date that were flagged as needing a reply or an action, newest first."""
+    return conn.execute("""
+        SELECT * FROM decisions
+        WHERE (needs_reply = 1 OR needs_action = 1) AND received_at >= ?
+        ORDER BY received_at DESC
+    """, (since.isoformat(),)).fetchall()
+
+
+def list_runs(conn):
+    """Every run, newest first, with how many emails it sorted."""
+    return conn.execute("""
+        SELECT run_id, COUNT(*) AS emails, MIN(processed_at) AS started
+        FROM decisions GROUP BY run_id ORDER BY started DESC
+    """).fetchall()
+
+
+def get_run(conn, run_id):
+    """Return all decisions from one run."""
+    return conn.execute("SELECT * FROM decisions WHERE run_id = ?", (run_id,)).fetchall()
+
+
 def last_run(conn):
     """Return all decisions from the most recent run, or an empty list if there are none."""
-    row = conn.execute("SELECT run_id FROM decisions ORDER BY processed_at DESC LIMIT 1").fetchone()
-    if row is None:
-        return []
-    return conn.execute("SELECT * FROM decisions WHERE run_id = ?", (row["run_id"],)).fetchall()
+    runs = list_runs(conn)
+    return get_run(conn, runs[0]["run_id"]) if runs else []
 
 
 def delete_run(conn, run_id):
