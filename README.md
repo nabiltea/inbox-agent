@@ -2,7 +2,7 @@
 
 An AI agent that organizes my Gmail. It sorts every email into labels, flags the emails that need a reply or an action from me, drafts replies, and shows everything on a web page with a daily summary. Several Claude models work together, each with its own job, and nothing is ever sent without my approval.
 
-**Status:** Steps 1 to 4 done. The agent reads my inbox, sorts each email into one of 11 labels designed by Claude Opus and reviewed by me, flags what needs a reply or an action, and suggests new labels for emails that fit none. With `--apply`, it adds the labels in Gmail and archives sorted emails, so the inbox only holds what still needs me. It records every decision in a database, so it never sorts the same email twice and any run can be undone. It has sorted my 10 newest emails so far. Next: label the rest of the inbox, then Step 5 (my own Gmail MCP server).
+**Status:** Steps 1 to 4 done. The agent sorts each email into one of 15 labels designed by Claude Opus and reviewed by me, flags what needs a reply or an action, and suggests new labels for emails that fit none. It adds the labels in Gmail and archives sorted emails, so the inbox only holds what still needs me. It records every decision in a database, so it never sorts the same email twice and any run can be undone. **It sorted my whole backlog with the Message Batches API: 6,547 emails for $1.54, taking the inbox from 6,494 emails to 60.** Next: Step 5, my own Gmail MCP server.
 
 ## How it works
 
@@ -72,6 +72,8 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 - **Label descriptions are the prompt.** The model only knows what a label means from its description, so fixing wrong labels usually means rewriting descriptions.
 - **A log of every decision.** A SQLite database (`inbox_agent.db`) records what the agent decided about each email and whether it added the label. So no email is processed (or paid for) twice, any run can be undone, and the log will feed the daily summary and accuracy tests.
 - **Dry run by default.** `triage.py` only changes Gmail when you add `--apply`. Running it without that is always safe.
+- **To-dos only for recent emails.** Emails older than 30 days are archived even if flagged as needing a reply or an action, because they've been dealt with. The flags are still logged, as test data for the model.
+- **Bulk where it pays.** Fetching emails uses Gmail batch requests (50 at a time). The 6,500-email backlog will use Claude's Message Batches API (half price, results within hours), while the daily run stays one email at a time, since that's only a few emails.
 - **Gmail labels aren't folders.** An email is stored once, whatever its labels. "Inbox" is just another label, and archiving removes it. So labeling and archiving don't change storage. The point of archiving is a clear inbox, not saving space.
 - **Database migrations.** When the log gained an `archived` column, `database.py` adds it to existing database files automatically, instead of requiring the old log to be deleted.
 
@@ -146,6 +148,51 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 - **Result:** undid the first 10 and re-sorted the 10 newest with archiving. 8 were labeled and archived. The 2 that still need me stayed in the inbox: a contract to sign and a LinkedIn message. A check in Gmail confirmed every label and inbox status.
 - **Also decided:** the two empty labels my old mail app created (`[Imap]/Drafts` and `Junk Email`) get deleted by hand in Gmail's settings, not by the agent. That way the agent's code still has no ability to delete anything.
 
+### Step 4e: First bigger batch
+- **Result:** `python triage.py 50 --apply` sorted 48 new emails (2 were already sorted and got skipped) in 94 seconds, for $0.0165. 42 were labeled and archived. 6 stayed in the inbox because they need me: 4 LinkedIn message notifications and 2 contract-signing emails. A check in Gmail confirmed all 48 labels and inbox statuses. The two old labels are deleted.
+- **Found:**
+  - **The inbox holds 6,529 emails.** At the current speed (about 2 seconds per email, one at a time) and cost ($0.00034 per email), sorting all of them would take about 3.6 hours and cost about $2.25. Before doing that, a few decisions are needed (see Open questions).
+  - **One email at a time is slow for a backlog.** For thousands of emails, Claude's Message Batches API fits better: it processes requests in the background at half the price.
+  - **Gmail returns at most 500 emails per request,** so sorting the full inbox needs paging through the results.
+
+### Step 4f: Getting ready for the backlog
+- **Decided:**
+  - Check the labels against **200 random emails from the last 5 years**, not just recent ones, before sorting the backlog.
+  - For **past emails, ignore "needs reply" and "needs action"**: they've all been dealt with. Triage still records the flags (useful for testing the model later), but emails older than 30 days get archived whatever their flags say.
+  - Process the backlog with the **Message Batches API**: half price, and speed doesn't matter.
+- **Built:**
+  - `gmail_client.py`: `list_message_ids()` pages through any number of emails, 500 per request, and accepts Gmail search queries like `newer_than:5y`. `get_emails()` fetches emails in bundles of 50 (Gmail "batch requests"), pausing between bundles to respect Gmail's rate limit and retrying any that fail. `list_recent_emails()` uses both.
+  - `triage.py`: `KEEP_IN_INBOX_DAYS = 30`. Older emails are archived even when flagged.
+  - `label_designer.py` now **improves the current labels** instead of starting over. It reads `labels.json` (descriptions) and examples from each Gmail label, plus a random sample with each email's date. It keeps label names stable, because renaming means relabeling. The code works out which labels are new, edited, unchanged or removed by comparing with the current file, rather than asking the model.
+- **Result:**
+  - Bulk fetching got 120 emails in 5 seconds, instead of about a minute one by one. Listing all 6,494 inbox IDs took 3 seconds. 5,776 of them are from the last 5 years, and 718 are older.
+  - The Label Designer read 236 emails for $0.41. It suggested 4 new labels for types the recent sample never showed: **Travel**, **Housing**, a second-hand marketplace and **Admin & Health**. It improved the descriptions of 10 others, for example adding the universities I attended before and older job boards, and left Indeed Alerts unchanged. 15 labels in total.
+- **Learned:** random sampling to get a representative picture of thousands of emails, paging through API results, batch requests and rate limits, and retrying with increasing waits ("exponential backoff").
+
+### Step 4g: Sorting the backlog with the Message Batches API
+- **Decided:** accepted all 15 labels. Job matches from one career site stay in University. The backlog includes every inbox email, also the 718 older than 5 years.
+- **Built:**
+  - `backlog.py` with four steps:
+    - `sample` is a live dry run on random unsorted emails.
+    - `submit` sends every unsorted inbox email to Claude as one batch, with each email's ID as the request's `custom_id`.
+    - `wait` checks the batch once a minute.
+    - `apply` reads the results, gets each email's current labels from Gmail, groups emails that need the same change, and applies each group with Gmail's `batchModify` (up to 1,000 emails per request). Then it logs every decision as one run.
+  - The batch requests use the same prompt and answer shape as live triage. The SDK's `transform_schema()` turns `TriageResult` into the JSON schema that `messages.parse()` normally builds for us.
+  - `change_labels_bulk()` in `gmail_client.py`, and `undo.py` now uses it too, so undoing thousands of emails takes a few requests instead of thousands.
+- **Dry run:** 40 random unsorted emails from 2019 to 2026 with the new labels, for $0.0187: **0 went to Unsorted**. The new labels caught their cases, such as a rental alert (Housing) and an appointment (Admin & Health).
+- **Found:**
+  - **Gmail's per-minute limit.** The first `submit` could only fetch 3,653 of the 6,486 emails. Gmail answered the rest with "Quota exceeded for quota metric 'Total Query Cost' and limit 'Units per minute per user'", and my retries only waited up to 8 seconds. A test script showed the errors started after just 44 requests. Fix: `get_emails()` now waits a full minute when Gmail refuses because of the limit, then carries on where it stopped. It also tells temporary errors (limits, brief outages) apart from permanent ones, like a deleted email, which it skips instead of retrying forever. Gmail allows this account roughly 400 to 500 emails per minute, so fetching 1,500 now takes 3.5 minutes with nothing missed.
+  - The skipped emails weren't lost. They weren't in the log, so they went into a second batch.
+  - The first version of `apply` said "to undo the whole backlog, run undo.py". But each `apply` is its own run, so undo only reverses the last batch. The message now says so.
+- **Result, batch 1:** 3,653 emails, finished by Claude in about 8 minutes with 0 errors. Cost: **$0.86** at half price (about $0.24 per 1,000 emails). In Gmail, 3,604 were labeled and archived, and 49 recent emails that need me stayed in the inbox. Only 28 went to Unsorted (0.8%). The biggest labels were Promotions (719), University (665), LinkedIn Updates (490), Orders & Payments (396) and Housing (314).
+- **Result, batch 2:** all 2,836 remaining emails were fetched with the fixed code, with none skipped. Claude finished them with 0 errors. 2,835 were archived and 1 stayed in the inbox, for **$0.66**. 17 went to Unsorted.
+- **Checked:** read 150 random backlog emails back from Gmail. **150 of 150** had their label, and their inbox status matched the log.
+- **In total:**
+  - **The inbox went from 6,494 emails to 60.** The 58 kept there are recent and need me (34 of them are messages from buyers or sellers on a second-hand marketplace), plus 2 new emails.
+  - **6,547 emails sorted for $1.54 in total.** That includes the earlier live runs and Label Designer tests.
+  - **Only 45 emails (0.7%) went to Unsorted.**
+  - Across all ages, the model flagged 751 emails as needing an action and 179 as needing a reply. They were archived anyway if older than 30 days. They're test data for checking the model's judgment later.
+
 ## What's left
 
 - [x] **Step 1:** First call to Claude
@@ -156,8 +203,14 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 - [x] **Step 4b:** review the suggestion, save the final labels in `labels.json` (kept out of Git, with a `labels.example.json` in the repo), and make triage read its labels from that file
 - [x] **Step 4c:** apply labels in Gmail and log every decision in SQLite, with undo
 - [x] **Step 4d:** archive sorted emails, except those that still need me
-- [ ] Delete the empty `[Imap]/Drafts` and `Junk Email` labels in Gmail's settings (by hand)
-- [ ] Sort the rest of the inbox in bigger batches, checking the results in Gmail along the way
+- [x] Delete the empty `[Imap]/Drafts` and `Junk Email` labels in Gmail's settings (by hand)
+- [x] First bigger batch: 50 emails
+- [x] Check the labels against a random 5-year sample (Label Designer), page through the whole inbox, fetch emails in bulk
+- [x] Review the 4 new labels and edited descriptions, and save them to `labels.json`
+- [x] Dry run on 40 random older emails with the new labels
+- [x] Sort the backlog with the Message Batches API: 6,489 emails in two batches, inbox down from 6,494 to 60
+- [x] Re-sort the first 58 emails, which were sorted before the 4 new labels existed
+- [ ] Review the 45 Unsorted emails with the Label Designer's help, and decide whether any new labels are worth adding
 - [ ] **Step 5:** my own Gmail MCP server, with tools to read emails and save drafts but none to send or delete. Test it in Claude Desktop
 - [ ] **Step 6:** the Drafter agent and the Critic
 - [ ] **Step 7:** web page with a daily summary, to-do list, drafted replies and label suggestions, and a way to run the agent every day. Group to-dos that come from the same conversation. A "done" button on a to-do should archive its email
@@ -166,6 +219,7 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 
 **Open questions**
 - Should the daily run happen automatically each morning (Windows Task Scheduler) or when I open the web page?
+
 ## Project files
 
 | File | What it does |
@@ -177,11 +231,12 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 | `label_designer.py` | Step 4: Claude Opus suggests a label set from my inbox and existing labels |
 | `labels.example.json` | A shareable example label set. My real labels are in `labels.json`, which isn't in Git |
 | `database.py` | The agent's memory: a SQLite log of every email it handled and what it decided |
-| `undo.py` | Removes the labels added in the last `--apply` run |
+| `undo.py` | Reverses the last run (`triage.py --apply` or `backlog.py apply`): removes the labels it added and moves archived emails back into the inbox |
+| `backlog.py` | Sorts the whole inbox backlog with Claude's Message Batches API: `sample`, `submit`, `wait`, `apply` |
 | `requirements.txt` | Python packages, with exact versions |
 | `.env.example` | Template for the API key file |
 
-Not in Git: `.env` (API key), `credentials.json` (Google app file), `token.json` (saved Gmail login), `labels_proposed.json` (label suggestions that quote my real emails), `labels.json` (my labels, whose descriptions name companies I applied to), `inbox_agent.db` (the log of my emails and decisions), `.venv/` (Python environment).
+Not in Git: `.env` (API key), `credentials.json` (Google app file), `token.json` (saved Gmail login), `labels_proposed.json` (label suggestions that quote my real emails), `labels.json` (my labels, whose descriptions name companies I applied to), `inbox_agent.db` (the log of my emails and decisions), `backlog_batch.json` (which batch is waiting, deleted after use), `.venv/` (Python environment).
 
 ## Setup
 
@@ -197,6 +252,7 @@ Not in Git: `.env` (API key), `credentials.json` (Google app file), `token.json`
 5. Run `python hello_claude.py` to check the Claude connection.
 6. Run `python show_inbox.py` to sign in to Gmail and list your 20 newest emails.
 7. Run `python triage.py` to see which label Claude would give each of your 20 newest emails, which ones need a reply or an action, and which fit no label. Add a number to sort more, for example `python triage.py 50`. Nothing in Gmail changes.
-8. Run `python label_designer.py` to have Claude Opus suggest a label set from your 200 newest inbox emails and your existing Gmail labels (about $0.30). It saves the suggestion to `labels_proposed.json`. Nothing in Gmail changes. Review it, then save the labels you want to keep as `labels.json`, in the same format as `labels.example.json`. Until you do, triage uses the example labels.
+8. Run `python label_designer.py` to have Claude Opus suggest a label set from 200 random inbox emails from the last 5 years, plus your current labels (about $0.40). If you already have a `labels.json`, it improves those labels instead of starting over. It saves the suggestion to `labels_proposed.json`. Nothing in Gmail changes. Review it, then save the labels you want to keep as `labels.json`, in the same format as `labels.example.json`. Until you do, triage uses the example labels.
 9. Run `python triage.py 10 --apply` to sort emails in Gmail for real, starting small. It adds the labels, and archives each sorted email unless it needs a reply or an action or is Unsorted. Gmail asks you to sign in again the first time, because changing labels needs more permission than reading. Emails that are already sorted get skipped. To reverse the last run, use `python undo.py`.
-10. To look inside the log (`inbox_agent.db`) in VS Code, install the **SQLite Viewer** extension. The file is a database, not text, so VS Code can't open it on its own.
+10. To sort a large backlog at half price, use `python backlog.py sample 40` to check the labels on a random sample first. Then run `python backlog.py submit`, `python backlog.py wait` (usually under an hour) and `python backlog.py apply`. Each `apply` is one run that `python undo.py` can reverse.
+11. To look inside the log (`inbox_agent.db`) in VS Code, install the **SQLite Viewer** extension. The file is a database, not text, so VS Code can't open it on its own.

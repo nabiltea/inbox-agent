@@ -11,6 +11,9 @@ labels.json
 # The agent's log of every email it handled (senders, subjects, decisions)
 inbox_agent.db
 
+# Which backlog batch is waiting to be applied (local state, deleted after use)
+backlog_batch.json
+
 # Python
 .venv/
 __pycache__/

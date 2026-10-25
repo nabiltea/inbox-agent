@@ -6,6 +6,7 @@ functions in an MCP server.
 """
 
 import html
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from email.utils import parseaddr
@@ -51,21 +52,85 @@ def get_gmail_service():
 
 def list_recent_emails(service, max_results=20, label_id="INBOX"):
     """Return the newest emails with the given label (the inbox by default), newest first."""
-    response = service.users().messages().list(
-        userId="me", labelIds=[label_id], maxResults=max_results
-    ).execute()
+    ids = list_message_ids(service, label_id=label_id, max_results=max_results)
+    return get_emails(service, ids)
 
-    emails = []
-    for item in response.get("messages", []):
-        # The list call only returns IDs, so fetch each email's sender and subject.
-        message = service.users().messages().get(
-            userId="me",
-            id=item["id"],
-            format="metadata",
-            metadataHeaders=["From", "Subject"],
+
+def list_message_ids(service, label_id="INBOX", query=None, max_results=None):
+    """Return the IDs of emails with the given label, newest first.
+
+    query uses Gmail's search syntax, for example "after:2021/10/22". Gmail returns
+    at most 500 IDs per request, so this keeps asking for the next "page" of results
+    until it has them all, or max_results of them.
+    """
+    ids = []
+    page_token = None
+    while True:
+        page_size = 500 if max_results is None else min(500, max_results - len(ids))
+        response = service.users().messages().list(
+            userId="me", labelIds=[label_id], q=query, maxResults=page_size, pageToken=page_token
         ).execute()
-        emails.append(_to_email(message))
-    return emails
+        ids += [item["id"] for item in response.get("messages", [])]
+        page_token = response.get("nextPageToken")  # None when there are no more pages
+        if page_token is None or (max_results is not None and len(ids) >= max_results):
+            return ids
+
+
+def get_emails(service, message_ids):
+    """Fetch the sender, subject and preview of many emails, in the same order as the IDs.
+
+    Fetching emails one at a time takes one request each. Instead, this sends them
+    to Gmail in bundles of 50 ("batch requests"). Gmail limits how much one account
+    can fetch per minute. When it refuses because of that limit, this waits a minute
+    for the limit to reset and carries on where it stopped.
+    """
+    found = {}
+    retry = []  # refused for a temporary reason, like the per-minute limit
+    skipped = []  # refused for good, for example because the email was deleted
+
+    def save(request_id, response, exception):
+        # Gmail calls this once for each email in a bundle, with either the email or an error.
+        if exception is None:
+            found[request_id] = _to_email(response)
+        elif _is_temporary(exception):
+            retry.append(request_id)
+        else:
+            skipped.append(request_id)
+
+    to_fetch = list(message_ids)
+    for _ in range(30):  # at most 30 one-minute waits
+        retry.clear()
+        for start in range(0, len(to_fetch), 50):
+            batch = service.new_batch_http_request(callback=save)
+            for message_id in to_fetch[start:start + 50]:
+                batch.add(
+                    service.users().messages().get(
+                        userId="me", id=message_id, format="metadata", metadataHeaders=["From", "Subject"]
+                    ),
+                    request_id=message_id,
+                )
+            batch.execute()
+            if retry:
+                # Limit reached: keep the refused emails and everything not tried yet for later.
+                to_fetch = retry + to_fetch[start + 50:]
+                break
+        else:
+            to_fetch = []  # the loop got through every bundle without a refusal
+        if not to_fetch:
+            break
+        print(f"Gmail's per-minute limit reached after {len(found)} emails. Waiting a minute...", flush=True)
+        time.sleep(60)
+
+    if to_fetch or skipped:
+        print(f"Couldn't fetch {len(to_fetch) + len(skipped)} emails from Gmail. They're skipped this time.")
+    return [found[message_id] for message_id in message_ids if message_id in found]
+
+
+def _is_temporary(error):
+    """True for Gmail errors worth retrying later: rate limits and brief outages."""
+    status = getattr(getattr(error, "resp", None), "status", None)
+    reason = str(getattr(error, "reason", "")).lower()
+    return status in (429, 500, 503) or (status == 403 and ("quota" in reason or "rate" in reason))
 
 
 def list_labels(service):
@@ -103,6 +168,15 @@ def change_labels(service, message_id, add=(), remove=()):
     service.users().messages().modify(
         userId="me", id=message_id, body={"addLabelIds": list(add), "removeLabelIds": list(remove)}
     ).execute()
+
+
+def change_labels_bulk(service, message_ids, add=(), remove=()):
+    """Make the same label change to many emails at once, up to 1,000 per request."""
+    for start in range(0, len(message_ids), 1000):
+        service.users().messages().batchModify(
+            userId="me",
+            body={"ids": message_ids[start:start + 1000], "addLabelIds": list(add), "removeLabelIds": list(remove)},
+        ).execute()
 
 
 def _load_saved_login():

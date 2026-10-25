@@ -13,7 +13,7 @@ Run it with:  python triage.py               dry run on the 20 newest emails: on
 import argparse
 import json
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
@@ -60,6 +60,11 @@ UNSORTED = "Unsorted"
 # All Mail. Set to False to only add labels.
 ARCHIVE_SORTED_EMAILS = True
 
+# Emails older than this get archived even if they're flagged as needing a reply or
+# an action: by then they've been dealt with. The flags are still saved in the log,
+# which is useful for testing how well the model spots them.
+KEEP_IN_INBOX_DAYS = 30
+
 LABEL_LIST = "\n".join(f"- {name}: {description}" for name, description in LABELS.items())
 
 SYSTEM_PROMPT = f"""\
@@ -104,27 +109,33 @@ class TriageResult(BaseModel):
     reason: str
 
 
-def triage(client, email):
-    """Ask Claude to sort one email. Returns the full API response."""
-    email_text = (
+def email_text(email):
+    """The email as Claude sees it: sender, subject and preview, inside <email> tags."""
+    return (
         "<email>\n"
         f"From: {email.sender} <{email.sender_address}>\n"
         f"Subject: {email.subject}\n"
         f"Preview: {email.snippet}\n"
         "</email>"
     )
+
+
+def triage(client, email):
+    """Ask Claude to sort one email. Returns the full API response."""
     return client.messages.parse(
         model=MODEL,
         max_tokens=2000,
         system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": email_text}],
+        messages=[{"role": "user", "content": email_text(email)}],
         output_config={"effort": "low"},  # sorting is easy, so keep thinking short and cheap
         output_format=TriageResult,  # makes Claude answer in exactly the TriageResult shape
     )
 
 
-def should_archive(result):
-    """Archive a sorted email, unless it still needs me: a reply, an action, or a label decision."""
+def should_archive(email, result):
+    """Archive a sorted email, unless it's recent and still needs me: a reply, an action, or a label decision."""
+    if datetime.now() - email.date > timedelta(days=KEEP_IN_INBOX_DAYS):
+        return True
     return not (result.needs_reply or result.needs_action or result.label == UNSORTED)
 
 
@@ -191,7 +202,7 @@ def main():
             # If the email already has this label (for example from my own Gmail filter),
             # leave it alone and note that, so undo won't remove a label the agent didn't add.
             label_added = label_id not in email.label_ids
-            archived = ARCHIVE_SORTED_EMAILS and should_archive(result) and "INBOX" in email.label_ids
+            archived = ARCHIVE_SORTED_EMAILS and should_archive(email, result) and "INBOX" in email.label_ids
             # Archiving means removing Gmail's INBOX label. Both changes go in one request.
             add = [label_id] if label_added else []
             remove = ["INBOX"] if archived else []
