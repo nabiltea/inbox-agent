@@ -2,7 +2,7 @@
 
 An AI agent that organizes my Gmail. It sorts every email into labels, flags the emails that need a reply or an action from me, drafts replies, and shows everything on a web page with a daily summary. Several Claude models work together, each with its own job, and nothing is ever sent without my approval.
 
-**Status:** Steps 1 to 4 done. The agent sorts each email into one of 15 labels designed by Claude Opus and reviewed by me, flags what needs a reply or an action, and suggests new labels for emails that fit none. It adds the labels in Gmail and archives sorted emails, so the inbox only holds what still needs me. It records every decision in a database, so it never sorts the same email twice and any run can be undone. **It sorted my whole backlog with the Message Batches API: 6,547 emails for $1.54, taking the inbox from 6,494 emails to 60.** Step 5 is built: my own Gmail MCP server, whose tools can search and read emails, list my to-dos and save reply drafts, but never send, delete or archive. It works in Claude Desktop. Step 6 is built: a Drafter agent (Claude Sonnet) that writes replies using the MCP server's tools, and a Critic (Claude Opus) that checks every draft before it can be saved. Next: Step 7, the web page.
+**Status:** Steps 1 to 4 done. The agent sorts each email into one of 15 labels designed by Claude Opus and reviewed by me, flags what needs a reply or an action, and suggests new labels for emails that fit none. It adds the labels in Gmail and archives sorted emails, so the inbox only holds what still needs me. It records every decision in a database, so it never sorts the same email twice and any run can be undone. **It sorted my whole backlog with the Message Batches API: 6,547 emails for $1.54, taking the inbox from 6,494 emails to 60.** Step 5 is built: my own Gmail MCP server, whose tools can search and read emails, list my to-dos and save reply drafts, but never send, delete or archive. It works in Claude Desktop. Step 6 is built: a Drafter agent (Claude Sonnet) that writes replies in my style, using a writing-style file learned from my sent emails and the MCP server's tools, and a Critic (Claude Opus) that checks every draft before it can be saved. **Next: Step 7, the web page.** It's planned and not started: a FastAPI app with HTML, HTMX and Tailwind, with Action needed, Unsorted and History pages, and a two-stage read so that actions come with exact steps, links and deadlines.
 
 ## How it works
 
@@ -66,6 +66,8 @@ stdin and stdout carry the conversation as JSON messages: the handshake, the lis
 | Label Designer | Claude Opus 5.5 | Reads a few hundred emails and my existing labels, and suggests labels with descriptions. Runs rarely, so the best model is worth the cost |
 | Drafter | Claude Sonnet 5.5 (effort medium) | An agent: decides for itself whether to look up past emails with the MCP server's read-only tools, then writes a reply |
 | Critic | Claude Opus 5.5 (effort high) | Checks each draft against everything the Drafter saw, for made-up facts, promises I never made, missed questions and wrong tone, and sends it back for changes |
+| Action reader (planned) | Claude Haiku 5.5 | Reads the whole email when it may need action, and finds what to do, where and by when. Answers yes, no or unsure |
+| Action reviewer (planned) | Claude Sonnet 5.5 | Looks only at the emails the Action reader was unsure about |
 
 ## Design decisions
 
@@ -111,7 +113,10 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 - **Gmail code separate from AI code.** All Gmail code is in `gmail_client.py`. That keeps the AI code simple, and it's what will become my Gmail MCP server.
 - **My own MCP server instead of a ready-made one.** Community Gmail MCP servers usually include send and delete, and would mean trusting someone else's code with my inbox. My own server only has the tools I choose, and it also works in Claude Desktop.
 - **Gmail filters and the agent work together.** My filters already sort job alerts by sender address. The agent catches the ones the filters miss by recognizing what an email is, not just who sent it.
-- **Facts come from code, judgment comes from the model.** Anything the code can check for itself (like whether a label already exists in Gmail) is computed in code, not asked of the model. The model is only used for decisions that need judgment.
+- **Facts come from code, judgment comes from the model.** Anything the code can check for itself (like whether a label already exists in Gmail) is computed in code, not asked of the model. The model is only used for decisions that need judgment. The other way around applies too: the model finds a deadline, but whether that makes an email *urgent* is a rule in my code (planned for Step 7).
+- **A cheap first pass for everything, a careful second pass where it pays off (planned).** Triage reads only the preview of every email. Only emails that may need action get a full read.
+- **A model cascade (planned).** A cheap model (Haiku) does the full read, and a stronger one (Sonnet) only reviews the cases the first one is unsure about. "Unsure" is defined concretely in the prompt, because a model's own sense of uncertainty isn't fully reliable.
+- **Missing a to-do is worse than a false alarm.** The action check leans towards flagging, and there's a manual "Needs action" button as a safety net.
 - **Label descriptions are the prompt.** The model only knows what a label means from its description, so fixing wrong labels usually means rewriting descriptions.
 - **A log of every decision.** A SQLite database (`inbox_agent.db`) records what the agent decided about each email and whether it added the label. So no email is processed (or paid for) twice, any run can be undone, and the log will feed the daily summary and accuracy tests.
 - **Dry run by default.** `triage.py` only changes Gmail when you add `--apply`. Running it without that is always safe.
@@ -285,7 +290,7 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - **Testing the Critic:** I gave it a deliberately bad draft for the same conversation, with an invented date and a promise I never made. It rejected the draft and caught both, plus three more problems: the invented date fell on a different weekday than the draft said; the draft mixed up who had done something; and a reply four months late should acknowledge the delay. Cost: $0.06.
 - **Not yet tested:** a draft that needs a revision round, and a draft that needs the Drafter to look up other emails. Both will come up with real use.
 
-### Step 6b: Reworking the Drafter with my decisions (in progress)
+### Step 6b: Reworking the Drafter with my decisions
 - **How we work from now on:** each design decision is laid out with its options, I decide, and the code is built in small pieces I can check. In the first version of Step 6, every choice was made for me, so this step revisits them.
 - **Decided:**
   - **The Drafter stays a separate agent,** a client of the MCP server, called from the web page. The MCP server stays a toolbox with no AI inside it. The web page is my hub; the MCP server is the AI apps' hub for Gmail.
@@ -310,7 +315,7 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - The style file has fixed sections: a rich overview of my voice (one or two full paragraphs), greetings and sign-offs by kind of recipient, tone, length and structure, phrases I often use, things I never do, and a few example sentences.
   - It contains no personal details.
   - My profile files live in `profile/` (not in Git), with generic versions in `profile.example/`.
-  - For PC and laptop: Gmail is the source of truth. An email that already has one of the agent's labels counts as sorted, and to-dos get their own Gmail label. To build in Step 7.
+  - For PC and laptop: Gmail is the source of truth. An email that already has one of the agent's labels counts as sorted, and to-dos get their own Gmail label. Moved to later, together with the demo, if I build it.
 - **Built:**
   - `style_builder.py write`: Claude Opus 5.5 (effort high, streaming) reads the collected emails and writes `profile/writing_style.md`. If that file already exists, it writes `writing_style.proposed.md` instead, so my own edits are never overwritten.
   - `profile/about_me.md`, a template I fill in myself, with an example version in `profile.example/`.
@@ -330,6 +335,52 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - **The lookup limit:** a search for everything returned 20 emails, all involving the person (10 from them, 8 from me to them, and 2 from someone else to them). A conversation without them was refused, and their own conversation was allowed.
   - **Group conversations**, on a real 14-message conversation with two other writers: a broad search returned 15 emails, all involving one of them. A conversation with only the *other* writer was allowed, which the first version would have refused. An unrelated conversation was still refused.
   - **The full Drafter**, on the same real conversation as before: it found my 3 earlier emails to the person and both profile files. It wrote a reply in my style, only to that person, with a placeholder for my opinion. Approved on the first try, for $0.10.
+
+### Step 7: The web page (planned, nothing built yet)
+
+**Technology**
+- **FastAPI** (Python web server), **HTML templates** (Jinja2), **HTMX** and **Tailwind CSS**.
+  - FastAPI: each address, like `/sort`, is a Python function.
+  - HTML templates: pages that Python fills in.
+  - HTMX: buttons that update part of the page without reloading it, with no JavaScript to write.
+  - Tailwind: styling with small utility classes, loaded with one line.
+- **Why not Streamlit:** Streamlit would be faster to build and easier to host, but I want to learn how web apps actually work and make the page look like my own. FastAPI is also a very common way to put AI agents behind an API in AI engineering jobs, and HTML and CSS are the foundation under every web framework, Streamlit included. Streamlit is quick to learn later if a job asks for it.
+- **Why Tailwind:** it's the most common styling approach at modern startups, it gives full control over the design, and the skill carries over to any frontend work. The other options were Pico.css (clean with almost no effort, but less unique), Bootstrap and my own CSS.
+- **It runs on my own computer** (`localhost`). Only my browser can open it, because it uses my Gmail login and API key. A demo version with made-up emails could go online later. That's the same amount of work with FastAPI as with Streamlit, except that hosting takes an hour more to set up.
+
+**Pages**
+- A menu bar with three pages, and a **"Sort new emails"** button that's always visible at the top.
+  1. **Action needed:** two columns, like an email app. On the left, the list of everything that needs me (replies and other actions), with filters and counts, urgent items first, and duplicates from the same conversation grouped. On the right, the selected email with its details and buttons. When nothing needs me, an "all done" summary instead of an empty page.
+  2. **Unsorted:** emails that fit no label, with the label each one suggests. I approve, edit or reject the suggestion, or pick a label myself.
+  3. **History:** past runs, what was sorted where, undo, and a **"Needs action"** button to move anything the agent missed onto my Action list.
+- **Why this layout:** a single page would get cluttered, and separate pages for everything would mean clicking back and forth. The two-column view fits how I'll work through emails one at a time and looks like a real product.
+
+**Reading actions properly: a two-stage read**
+- **Stage 1 (as now):** triage reads only the sender, subject, date and Gmail's preview (the first ~200 characters). That's enough to sort, but it can miss what exactly an action is, where to do it, or by when.
+- **Stage 2 (new): a full read of the whole email.** It happens for every email outside the **routine labels**, plus any routine-label email that triage flags anyway.
+  - **Routine labels** (never need action in practice): Promotions, Job Alerts, LinkedIn Alerts and Indeed Alerts. In the last 30 days, 284 emails arrived (about 9 a day). The 103 in those labels needed no action, and every flagged action came from the others, so this means about 6 full reads a day.
+  - **Security & Logins stays non-routine,** because a "was this you?" alert can need action.
+- **What stage 2 finds:**
+  - the type of action: reply by email, reply on another site, sign or fill in a form, pay, verify an account, attend something, or other,
+  - what exactly to do, as short steps,
+  - where to do it (the link),
+  - the deadline,
+  - whether it's time-sensitive without a date ("as soon as possible", "today").
+- **A model cascade:**
+  - **Claude Haiku** reads each email and answers **yes / no / unsure**. It says "unsure" whenever an email asks for something but it can't tell whether that's required, optional or already done, and whenever it's torn between yes and no.
+  - **Claude Sonnet** reviews only the unsure ones.
+  - Cost estimate for this stage: about $0.50 a month, against about $2 if Sonnet read everything. The whole app should cost about $1.50 to $2 a month in normal use.
+- **Why lean towards flagging:** missing an email that needs action is much worse than a false alarm I can dismiss in a second. In other words, recall matters more than precision here. The full read filters out the false alarms, and the History page's "Needs action" button catches anything both models miss.
+- **Urgency is decided by code, not the model:** the model only finds the deadline. Overdue or due within 2 days counts as **urgent**, and everything else is normal. "Time-sensitive" emails without a date are marked separately.
+
+**Build order** (one small piece at a time, with my decisions along the way)
+1. A bare page that shows my current to-dos (learning how FastAPI, templates and Tailwind fit together, with nothing that changes Gmail yet)
+2. The full-read step and urgency
+3. The "Sort new emails" button
+4. The Unsorted page
+5. The History page
+6. The draft flow: hints box, the Critic's verdict, and saving, also when the Critic isn't satisfied
+- **Later, together with the demo (if I build it):** using the project on both my PC and my laptop, with Gmail as the source of truth and a "To do" Gmail label.
 
 ## What's left
 
@@ -353,22 +404,24 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 - [x] Try the MCP server in Claude Desktop, including saving one draft
 - [x] **Step 6:** the Drafter agent and the Critic (dry run on a real conversation, and a Critic test with a planted bad draft)
 - [x] Step 6b: collect my sent emails, and have Claude Opus write my writing-style file
-- [ ] Step 6b: review the style file, and fill in `profile/about_me.md`
+- [x] Step 6b: fill in `profile/about_me.md`
+- [ ] Step 6b: review `profile/writing_style.md`. Its sign-off section says I use my full name only in formal complaints, but my about-me file says I use it with everyone I don't know. Make them agree
 - [x] Step 6b: give the Drafter and the Critic both profile files, limit lookups to the same person, Reply by default and Reply all only when asked
 - [ ] Use the Drafter on a real email that needs a reply, with `--save`, and check the draft in Gmail
-- [ ] **Step 7:** web page, where everything is started by a button and nothing runs on its own:
-  - "Sort new emails", with a summary of what arrived and what needs a reply or an action,
-  - a to-do list that groups to-dos from the same conversation, with a "done" button that archives the email,
-  - a "Draft reply" button with a hints box, showing the draft and the Critic's verdict, with "save to Gmail drafts" (also when the Critic isn't satisfied),
-  - label suggestions to approve,
-  - changing an email's label by hand, especially for Unsorted emails
+- [x] **Step 7 plan:** technology, pages, the two-stage action read, the model cascade, urgency and build order (see Step 7 above)
+- [ ] **Step 7, piece 1:** a bare page that shows my current to-dos
+- [ ] **Step 7, piece 2:** the full-read step (Haiku, with Sonnet for unsure cases) and urgency
+- [ ] **Step 7, piece 3:** the "Sort new emails" button, with a summary of what arrived and what needs me
+- [ ] **Step 7, piece 4:** the Unsorted page: approve, edit or reject label suggestions, or pick a label by hand
+- [ ] **Step 7, piece 5:** the History page: past runs, undo, and a "Needs action" button
+- [ ] **Step 7, piece 6:** the draft flow: "Draft reply" with a hints box, the Critic's verdict, and saving to Gmail drafts, also when the Critic isn't satisfied
 - [ ] Learn from my edits: compare each draft with what I actually sent, and have Claude suggest updates to the writing-style file for me to approve
-- [ ] Demo mode with made-up emails, safe to show in interviews and maybe online
+- [ ] Demo mode with made-up emails, safe to show in interviews and maybe online, together with using the project on both my PC and my laptop (a "To do" Gmail label, with Gmail as the source of truth)
 - [ ] **Step 8:** accuracy tests (evals), README polish and a demo video
 - [ ] **Cost:** try prompt caching for triage's system prompt, which is the same for every email
 
 **Open questions**
-- None right now.
+- Build the demo mode at all? It's mostly for showing the finished product, so I'll decide once the web page works.
 
 ## Project files
 
