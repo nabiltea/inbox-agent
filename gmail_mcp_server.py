@@ -142,15 +142,17 @@ def list_todos(days: int = 14) -> list[dict]:
 
 
 @server.tool(annotations=SAVES_DRAFT)
-def create_reply_draft(thread_id: str, body: str) -> dict[str, Any]:
+def create_reply_draft(thread_id: str, body: str, reply_all: bool = False) -> dict[str, Any]:
     """Save a reply to a conversation as a draft in my Gmail. It is never sent.
 
     The draft answers the newest message someone else sent in the thread and
     appears inside that conversation in Gmail, where I can edit it and send it
     myself. body is the plain text of the reply, without a subject line.
+    By default it goes only to that message's sender. Set reply_all to true only
+    when I asked for Reply all: then everyone else on that message goes in Cc.
     """
     with _gmail_lock:
-        return save_reply_draft(gmail(), thread_id, body)
+        return save_reply_draft(gmail(), thread_id, body, reply_all)
 
 
 if __name__ == "__main__":

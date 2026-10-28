@@ -17,7 +17,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from email.message import EmailMessage
-from email.utils import parseaddr
+from email.utils import formataddr, getaddresses, parseaddr
 from pathlib import Path
 
 from google.auth.exceptions import RefreshError
@@ -25,6 +25,7 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 PROJECT_DIR = Path(__file__).parent
 CREDENTIALS_FILE = PROJECT_DIR / "credentials.json"  # identifies this app to Google
@@ -146,6 +147,18 @@ def get_emails(service, message_ids):
     return [found[message_id] for message_id in message_ids if message_id in found]
 
 
+def _execute(request, attempts=5):
+    """Run one Gmail request. If Gmail refuses because of its per-minute limit, wait a minute and try again."""
+    for attempt in range(attempts):
+        try:
+            return request.execute()
+        except HttpError as error:
+            if not _is_temporary(error) or attempt == attempts - 1:
+                raise
+            print("Gmail's per-minute limit reached. Waiting a minute...", file=sys.stderr, flush=True)
+            time.sleep(60)
+
+
 def _is_temporary(error):
     """True for Gmail errors worth retrying later: rate limits and brief outages."""
     status = getattr(getattr(error, "resp", None), "status", None)
@@ -207,10 +220,12 @@ def get_my_address(service):
 def get_thread(service, thread_id, max_chars_per_message=4000):
     """Return a whole conversation: its subject, and each message's sender, recipients, date and text.
 
-    Long messages are cut to max_chars_per_message characters, mostly to drop the
-    quoted copies of earlier messages that replies tend to repeat at the bottom.
+    Each message says whether I sent it ("from_me"). Long messages are cut to
+    max_chars_per_message characters, mostly to drop the quoted copies of earlier
+    messages that replies tend to repeat at the bottom.
     """
-    thread = service.users().threads().get(userId="me", id=thread_id, format="full").execute()
+    thread = _execute(service.users().threads().get(userId="me", id=thread_id, format="full"))
+    me = get_my_address(service).lower()
     messages = []
     for message in thread["messages"]:
         headers = _headers(message)
@@ -220,7 +235,9 @@ def get_thread(service, thread_id, max_chars_per_message=4000):
         messages.append({
             "id": message["id"],
             "from": headers.get("from", ""),
+            "from_me": parseaddr(headers.get("from", ""))[1].lower() == me,
             "to": headers.get("to", ""),
+            "cc": headers.get("cc", ""),
             "date": datetime.fromtimestamp(int(message["internalDate"]) / 1000).isoformat(timespec="minutes"),
             "body": body,
         })
@@ -228,22 +245,41 @@ def get_thread(service, thread_id, max_chars_per_message=4000):
     return {"thread_id": thread_id, "subject": subject, "messages": messages}
 
 
-def create_reply_draft(service, thread_id, body):
+def get_message(service, message_id):
+    """One email with its sender, recipients, subject, date and full text."""
+    message = _execute(service.users().messages().get(userId="me", id=message_id, format="full"))
+    headers = _headers(message)
+    return {
+        "id": message["id"],
+        "thread_id": message["threadId"],
+        "from": headers.get("from", ""),
+        "to": headers.get("to", ""),
+        "subject": headers.get("subject") or "(no subject)",
+        "date": datetime.fromtimestamp(int(message["internalDate"]) / 1000).isoformat(timespec="minutes"),
+        "body": _extract_body(message["payload"]),
+    }
+
+
+def create_reply_draft(service, thread_id, body, reply_all=False):
     """Save a reply to a conversation as a draft. It's never sent: I review and send drafts myself."""
     thread = service.users().threads().get(
         userId="me", id=thread_id, format="metadata",
-        metadataHeaders=["From", "To", "Reply-To", "Subject", "Message-ID", "References"],
+        metadataHeaders=["From", "To", "Cc", "Reply-To", "Subject", "Message-ID", "References"],
     ).execute()
-    reply = build_reply(thread["messages"], get_my_address(service), body)
+    reply = build_reply(thread["messages"], get_my_address(service), body, reply_all)
     raw = base64.urlsafe_b64encode(reply.as_bytes()).decode()
     draft = service.users().drafts().create(
         userId="me", body={"message": {"raw": raw, "threadId": thread_id}}
     ).execute()
-    return {"draft_id": draft["id"], "to": reply["To"], "subject": reply["Subject"]}
+    return {"draft_id": draft["id"], "to": reply["To"], "cc": reply["Cc"] or "", "subject": reply["Subject"]}
 
 
-def build_reply(messages, my_address, body):
+def build_reply(messages, my_address, body, reply_all=False):
     """Build a reply to the newest message in a conversation that someone else sent.
+
+    By default it goes only to that message's sender, like Gmail's Reply. With
+    reply_all, everyone else on that message (its To and Cc, except me) goes in Cc,
+    like Gmail's Reply all.
 
     The In-Reply-To and References headers tell email apps which message this
     answers, so the reply shows up inside the same conversation.
@@ -263,6 +299,13 @@ def build_reply(messages, my_address, body):
     reply = EmailMessage()
     reply["To"] = to
     reply["Subject"] = subject
+    if reply_all:
+        # getaddresses splits header text like '"Ann" <ann@x.com>, bob@y.com' into (name, address) pairs.
+        others = getaddresses([headers.get("to", ""), headers.get("cc", "")])
+        skip = {my_address.lower()} | {address.lower() for _, address in getaddresses([to])}
+        cc = [formataddr((name, address)) for name, address in others if address and address.lower() not in skip]
+        if cc:
+            reply["Cc"] = ", ".join(dict.fromkeys(cc))  # dict.fromkeys drops duplicates, keeping the order
     if headers.get("message-id"):
         reply["In-Reply-To"] = headers["message-id"]
         reply["References"] = f"{headers.get('references', '')} {headers['message-id']}".strip()
@@ -298,6 +341,33 @@ def _sign_in():
     creds = flow.run_local_server(port=0)
     TOKEN_FILE.write_text(creds.to_json())
     return creds
+
+
+# Where the quoted older message starts in a reply. Everything from there on was
+# written earlier (by someone else, or by me), so strip_quoted cuts it off.
+QUOTE_STARTS = [
+    # Gmail, Apple Mail: "On Tue, 3 Oct, X wrote:". Long ones wrap, so "wrote:" can be alone on the next line.
+    re.compile(r"^On [^\n]+\n?[^\n]*wrote:\s*$", re.M),
+    re.compile(r"^Op [^\n]+\n?[^\n]*schreef[^\n]*:\s*$", re.M),  # the same in Dutch
+    re.compile(r"^-{2,} ?(Original Message|Forwarded message|Forwarded Conversation|Oorspronkelijk bericht|Doorgestuurd bericht)", re.M | re.I),
+    re.compile(r"^Begin forwarded message:", re.M),  # Apple Mail's forwards
+    re.compile(r"^Forwarded Conversation\s*$", re.M),  # Gmail's forwards of a whole conversation
+    re.compile(r"^(From|Van): [^\n]+\n(Sent|Date|Verzonden|Datum): ", re.M),  # Outlook's quoted header
+    re.compile(r"^_{20,}\s*$", re.M),  # Outlook's separator line
+]
+
+# Lines added by phones and mail apps, not by the person writing.
+APP_LINES = re.compile(r"^\s*(sent from my iphone|verzonden vanaf mijn iphone|sent from outlook[^\n]*|get outlook for [^\n]*)\s*$", re.I | re.M)
+
+
+def strip_quoted(body):
+    """Keep only the new text of an email: cut the quoted older messages and app signatures."""
+    text = body.replace("\r\n", "\n")
+    cut = min([match.start() for pattern in QUOTE_STARTS if (match := pattern.search(text))], default=len(text))
+    text = text[:cut]
+    text = "\n".join(line for line in text.split("\n") if not line.startswith(">"))  # ">" marks quoted lines
+    text = APP_LINES.sub("", text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
 def _headers(message):
