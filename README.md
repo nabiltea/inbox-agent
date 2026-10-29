@@ -405,7 +405,7 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 - [x] **Step 6:** the Drafter agent and the Critic (dry run on a real conversation, and a Critic test with a planted bad draft)
 - [x] Step 6b: collect my sent emails, and have Claude Opus write my writing-style file
 - [x] Step 6b: fill in `profile/about_me.md`
-- [ ] Step 6b: review `profile/writing_style.md`. Its sign-off section says I use my full name only in formal complaints, but my about-me file says I use it with everyone I don't know. Make them agree
+- [x] Step 6b: resolve the sign-off conflict between `profile/about_me.md` and `profile/writing_style.md` (I removed the sign-off line from the about-me file, so the style file's sign-off section applies)
 - [x] Step 6b: give the Drafter and the Critic both profile files, limit lookups to the same person, Reply by default and Reply all only when asked
 - [ ] Use the Drafter on a real email that needs a reply, with `--save`, and check the draft in Gmail
 - [x] **Step 7 plan:** technology, pages, the two-stage action read, the model cascade, urgency and build order (see Step 7 above)
