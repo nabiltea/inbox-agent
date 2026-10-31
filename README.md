@@ -2,7 +2,7 @@
 
 An AI agent that organizes my Gmail. It sorts every email into labels, flags the emails that need a reply or an action from me, drafts replies, and shows everything on a web page with a daily summary. Several Claude models work together, each with its own job, and nothing is ever sent without my approval.
 
-**Status:** Steps 1 to 4 done. The agent sorts each email into one of 15 labels designed by Claude Opus and reviewed by me, flags what needs a reply or an action, and suggests new labels for emails that fit none. It adds the labels in Gmail and archives sorted emails, so the inbox only holds what still needs me. It records every decision in a database, so it never sorts the same email twice and any run can be undone. **It sorted my whole backlog with the Message Batches API: 6,547 emails for $1.54, taking the inbox from 6,494 emails to 60.** Step 5 is built: my own Gmail MCP server, whose tools can search and read emails, list my to-dos and save reply drafts, but never send, delete or archive. It works in Claude Desktop. Step 6 is built: a Drafter agent (Claude Sonnet) that writes replies in my style, using a writing-style file learned from my sent emails and the MCP server's tools, and a Critic (Claude Opus) that checks every draft before it can be saved. **Now: Step 7, the web page:** a FastAPI app with HTML templates, HTMX and Tailwind, with Action needed, Unsorted and History pages, and a two-stage read so that actions come with exact steps, links and deadlines. The first small piece is built: the web app runs on my computer, where only I can open it, and serves its first page.
+**Status:** Steps 1 to 4 done. The agent sorts each email into one of 15 labels designed by Claude Opus and reviewed by me, flags what needs a reply or an action, and suggests new labels for emails that fit none. It adds the labels in Gmail and archives sorted emails, so the inbox only holds what still needs me. It records every decision in a database, so it never sorts the same email twice and any run can be undone. **It sorted my whole backlog with the Message Batches API: 6,547 emails for $1.54, taking the inbox from 6,494 emails to 60.** Step 5 is built: my own Gmail MCP server, whose tools can search and read emails, list my to-dos and save reply drafts, but never send, delete or archive. It works in Claude Desktop. Step 6 is built: a Drafter agent (Claude Sonnet) that writes replies in my style, using a writing-style file learned from my sent emails and the MCP server's tools, and a Critic (Claude Opus) that checks every draft before it can be saved. **Now: Step 7, the web page:** a FastAPI app with HTML templates, HTMX and Tailwind, with Action needed, Unsorted and History pages, and a two-stage read so that actions come with exact steps, links and deadlines. The first pieces are built: the web app runs on my computer, where only I can open it, and serves a first page styled with Tailwind.
 
 ## How it works
 
@@ -101,6 +101,7 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 - **Only my computer can open the web page.** Its server listens on 127.0.0.1 rather than on the network, so other devices on the same Wi-Fi can't reach it. That matters because the page will have buttons that change my Gmail.
 - **Email content can't run as code on the web page.** The templates escape every value they fill in, so a `<` in an email subject is shown as text. A test with a planted `<script>` tag confirmed it.
 - **No outside scripts on the web page.** Every file the browser loads comes from my own app, because a script from somewhere else, running at my app's address, could read my pages and press my buttons. So Tailwind's styles get built into a local CSS file instead of loaded from a CDN, and FastAPI's automatic documentation pages, which load scripts from a CDN, are switched off.
+- **The web app can't hand out other files.** It only serves files from `web/static/`. Requests that try to climb out of that folder, like `/static/../../token.json`, get "404 Not Found".
 
 ### Engineering choices
 
@@ -410,6 +411,29 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - `pip check` found no conflicts, and Starlette stayed at 1.10.0 for the MCP server.
 - **Found and decided:** FastAPI adds pages of its own: `/docs` and `/redoc` (interactive documentation of the app's addresses) and `/openapi.json`, which those two read. The documentation pages load their scripts from a public CDN with only the major version fixed, so the file can change at any time, and a script running at my app's address could read my pages and press my buttons. These pages are useful for an API that other programs call, but this app serves pages to me, so I switched them off. All three now answer "404 Not Found".
 
+**Piece 1b: styling with Tailwind**
+- **Decided:**
+  - The built CSS is readable on my PC, so I can open it and see what each class turns into. A public site, like the online demo, would build it minified (`--minify`).
+  - An empty `web/static/.gitkeep` keeps the `web/static/` folder in Git. Git doesn't store empty folders, and the built CSS stays out of Git, so without it the app would refuse to start on a fresh clone ("Directory does not exist").
+  - The template links to the CSS with FastAPI's `url_for('static', path='app.css').path`. The link is built from the folder's name in the app, and `.path` keeps it short (`/static/app.css`). That avoids a known problem behind a hosting service's HTTPS, where the full link can come out as `http://…` and get blocked.
+  - Minimal styling for now. The real look comes with the layout, in piece 1c.
+- **Built:**
+  - Tailwind's program, downloaded to `tools/` (not in Git) from Tailwind's GitHub releases. Its SHA-256 fingerprint matched the one published with the release.
+  - `web/tailwind.css`, Tailwind's input file. `source(".")` limits Tailwind to the `web/` folder.
+  - `web/app.py` serves the `web/static/` folder at `/static`. The template links to the built `app.css` and uses a few Tailwind classes.
+- **Learned:**
+  - Utility classes: each class does one small thing (`p-8` adds space inside an element, `rounded-lg` rounds the corners), and an element gets its look from a list of them.
+  - Tailwind reads files as plain text and writes CSS only for the class names it finds. It even picked up the word "static" from `web/app.py` and made a harmless `.static` rule.
+  - One page is several requests: the browser gets the HTML, finds the `<link>` to the CSS, and fetches that separately.
+  - A fingerprint (SHA-256 checksum) proves a download is exactly the published file. It can't prove the published file itself is safe, so it only helps together with downloading from the official source.
+- **Result:**
+  - The build takes 28 ms (about 1 second including starting the 112 MB program) and makes an 8 KB CSS file with no local file paths in it.
+  - Every class in the template got a rule. A comparison build that read the whole project folder picked up 6 extra words from the README and Python files (`table`, `block`, `fixed`…). The real build didn't, so Tailwind only reads `web/`.
+  - The browser shows a white card, 576 px wide and centered, with rounded corners and a shadow, on a light gray page. While trying out the watcher, I changed the page to light blue (`bg-blue-100`) and kept it.
+  - Requests for files outside `web/static/`, like `/static/../../token.json`, get "404 Not Found".
+  - The watcher (`--watch`) uses about 94 MB of memory and almost no processor time: 0.14 seconds in total, including its first build and two rebuilds. A rebuild after saving a template takes under half a millisecond.
+- **Found:** the app doesn't tell browsers how long to keep the CSS (there's no `Cache-Control` header), so a browser may reuse its saved copy for a short while after a rebuild. Ctrl+F5 reloads the page without it. The usual fix is a version number in the CSS link, for later.
+
 ## What's left
 
 - [x] **Step 1:** First call to Claude
@@ -438,7 +462,7 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 - [ ] Use the Drafter on a real email that needs a reply, with `--save`, and check the draft in Gmail
 - [x] **Step 7 plan:** technology, pages, the two-stage action read, the model cascade, urgency and build order (see Step 7 above)
 - [x] **Step 7, piece 1a:** the first page: a FastAPI app with one template, only reachable from my computer
-- [ ] **Step 7, piece 1b:** Tailwind's standalone program, styling the page
+- [x] **Step 7, piece 1b:** Tailwind's standalone program, styling the page
 - [ ] **Step 7, piece 1c:** the layout: menu bar and "Sort new emails" button
 - [ ] **Step 7, piece 1d:** my to-dos from the database
 - [ ] **Step 7, piece 1e:** only the to-dos still in my inbox, and what happens when the Gmail login has expired
@@ -473,12 +497,12 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 | `check_mcp_server.py` | Starts the MCP server the way an app would, lists its tools and tries the read-only ones |
 | `drafter.py` | The Drafter agent and the Critic: writes a reply to one conversation, reviews it, and saves it as a Gmail draft with `--save` |
 | `style_builder.py` | Builds my writing-style file: `collect` gathers my sent emails, `write` has Claude Opus describe my style |
-| `web/` | Step 7: the web page. `app.py` is the FastAPI app, and `templates/` holds the HTML templates it fills in |
+| `web/` | Step 7: the web page. `app.py` is the FastAPI app, `templates/` holds the HTML templates it fills in, `tailwind.css` tells Tailwind's program what to build, and `static/` holds files sent to the browser as they are, like the built CSS |
 | `profile.example/` | Example versions of my profile files. The real ones are in `profile/`, which isn't in Git |
 | `requirements.txt` | Python packages, with exact versions |
 | `.env.example` | Template for the API key file |
 
-Not in Git: `.env` (API key), `credentials.json` (Google app file), `token.json` (saved Gmail login), `labels_proposed.json` (label suggestions that quote my real emails), `labels.json` (my labels, whose descriptions name companies I applied to), `inbox_agent.db` (the log of my emails and decisions), `backlog_batch.json` (which batch is waiting, deleted after use), `style_source_emails.json` (my sent emails, collected for the writing-style file), `profile/` (my writing-style and about-me files), `.claude/` (settings for testing the web page in the Claude app), `.venv/` (Python environment).
+Not in Git: `.env` (API key), `credentials.json` (Google app file), `token.json` (saved Gmail login), `labels_proposed.json` (label suggestions that quote my real emails), `labels.json` (my labels, whose descriptions name companies I applied to), `inbox_agent.db` (the log of my emails and decisions), `backlog_batch.json` (which batch is waiting, deleted after use), `style_source_emails.json` (my sent emails, collected for the writing-style file), `profile/` (my writing-style and about-me files), `.claude/` (settings for testing the web page in the Claude app), `tools/` (Tailwind's program, 112 MB), `web/static/app.css` (the CSS that Tailwind's program builds), `.venv/` (Python environment).
 
 ## Setup
 
@@ -501,4 +525,6 @@ Not in Git: `.env` (API key), `credentials.json` (Google app file), `token.json`
 12. Run `python check_mcp_server.py` to check the Gmail MCP server. To use it in Claude Desktop, add an `mcpServers` section to Claude Desktop's `claude_desktop_config.json`, keeping everything already in the file. The server's `command` is the full path to `.venv\Scripts\python.exe`, and its `args` is the full path to `gmail_mcp_server.py`. Then quit and reopen Claude Desktop. **Settings → Developer → Edit Config** shows where the file is.
 13. Build your profile: run `python style_builder.py collect`, check `style_source_emails.json`, then run `python style_builder.py write` (about $0.15). Read and edit `profile/writing_style.md`, and fill in `profile/about_me.md` (see `profile.example/`).
 14. Run `python drafter.py --search "from:someone@example.com"` to draft a reply to the newest matching email. Add `--note "what to say"` to tell it what you want, and `--save` to save the approved reply as a Gmail draft. Without `--save`, nothing changes in Gmail. A draft costs roughly $0.05 to $0.20. The Microsoft Store version of Claude keeps it in `%LOCALAPPDATA%\Claude-Data\<app folder>\`, not `%APPDATA%\Claude\` as many guides say. The file is a database, not text, so VS Code can't open it on its own.
-15. Start the web page from the project folder with `python -m uvicorn web.app:app --reload`, then open http://127.0.0.1:8000 in a browser. Only this computer can open it. Stop it with Ctrl+C.
+15. Get Tailwind's program, once per computer. In a browser, open github.com/tailwindlabs/tailwindcss/releases/tag/v4.3.3 and, under **Assets**, download `tailwindcss-windows-x64.exe` and `sha256sums.txt`. Create a `tools` folder in the project, move the program into it and rename it `tailwindcss.exe`. Then check that it's the genuine file: run `Get-FileHash tools\tailwindcss.exe` in PowerShell and compare the Hash with the line for `tailwindcss-windows-x64.exe` in `sha256sums.txt`. Only use the program if they're the same.
+16. Build the page's CSS with `tools\tailwindcss.exe -i web/tailwind.css -o web/static/app.css`. While editing templates, add `--watch` and leave it running in a second terminal, so the CSS is rebuilt every time a file is saved.
+17. Start the web page from the project folder with `python -m uvicorn web.app:app --reload`, then open http://127.0.0.1:8000 in a browser. Only this computer can open it. Stop it with Ctrl+C.

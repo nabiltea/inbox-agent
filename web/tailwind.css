@@ -1,0 +1,7 @@
+/* Tailwind's input file. It isn't sent to browsers: Tailwind's program
+   (tools/tailwindcss.exe) reads it, collects every Tailwind class used in the
+   web/ folder, and writes the finished CSS to web/static/app.css.
+
+   source(".") limits Tailwind to this folder (web/), so it never reads the rest
+   of the project. My own colors and fonts will go here later. */
+@import "tailwindcss" source(".");

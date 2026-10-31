@@ -23,6 +23,12 @@ backlog_batch.json
 # Settings for testing the web page in the Claude app (its browser pane starts the server)
 .claude/
 
+# Downloaded programs, like Tailwind's (112 MB, and GitHub refuses files over 100 MB)
+tools/
+
+# The CSS that Tailwind's program builds from the templates (rebuilt, never edited by hand)
+web/static/app.css
+
 # Python
 .venv/
 __pycache__/
