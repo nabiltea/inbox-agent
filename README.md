@@ -2,7 +2,7 @@
 
 An AI agent that organizes my Gmail. It sorts every email into labels, flags the emails that need a reply or an action from me, drafts replies, and shows everything on a web page with a daily summary. Several Claude models work together, each with its own job, and nothing is ever sent without my approval.
 
-**Status:** Steps 1 to 4 done. The agent sorts each email into one of 15 labels designed by Claude Opus and reviewed by me, flags what needs a reply or an action, and suggests new labels for emails that fit none. It adds the labels in Gmail and archives sorted emails, so the inbox only holds what still needs me. It records every decision in a database, so it never sorts the same email twice and any run can be undone. **It sorted my whole backlog with the Message Batches API: 6,547 emails for $1.54, taking the inbox from 6,494 emails to 60.** Step 5 is built: my own Gmail MCP server, whose tools can search and read emails, list my to-dos and save reply drafts, but never send, delete or archive. It works in Claude Desktop. Step 6 is built: a Drafter agent (Claude Sonnet) that writes replies in my style, using a writing-style file learned from my sent emails and the MCP server's tools, and a Critic (Claude Opus) that checks every draft before it can be saved. **Now: Step 7, the web page:** a FastAPI app with HTML templates, HTMX and Tailwind, with Action needed, Unsorted and History pages, and a two-stage read so that actions come with exact steps, links and deadlines. The first pieces are built: the web app runs on my computer, where only I can open it, with a shared layout: a menu for its three pages and the "Sort new emails" button, styled with Tailwind and the Inter font.
+**Status:** Steps 1 to 4 done. The agent sorts each email into one of 15 labels designed by Claude Opus and reviewed by me, flags what needs a reply or an action, and suggests new labels for emails that fit none. It adds the labels in Gmail and archives sorted emails, so the inbox only holds what still needs me. It records every decision in a database, so it never sorts the same email twice and any run can be undone. **It sorted my whole backlog with the Message Batches API: 6,547 emails for $1.54, taking the inbox from 6,494 emails to 60.** Step 5 is built: my own Gmail MCP server, whose tools can search and read emails, list my to-dos and save reply drafts, but never send, delete or archive. It works in Claude Desktop. Step 6 is built: a Drafter agent (Claude Sonnet) that writes replies in my style, using a writing-style file learned from my sent emails and the MCP server's tools, and a Critic (Claude Opus) that checks every draft before it can be saved. **Now: Step 7, the web page:** a FastAPI app with HTML templates, HTMX and Tailwind, with Action needed, Unsorted and History pages, and a two-stage read so that actions come with exact steps, links and deadlines. The first pieces are built: the web app runs on my computer, where only I can open it, with a shared layout (a menu for its three pages and the "Sort new emails" button), styled with Tailwind and the Inter font. The Action needed page lists my real to-dos from the agent's log, one row per conversation.
 
 ## How it works
 
@@ -378,7 +378,7 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 - **Urgency is decided by code, not the model:** the model only finds the deadline. Overdue or due within 2 days counts as **urgent**, and everything else is normal. "Time-sensitive" emails without a date are marked separately.
 
 **Build order** (one small piece at a time, with my decisions along the way)
-1. A bare page that shows my current to-dos (learning how FastAPI, templates and Tailwind fit together, with nothing that changes Gmail yet), in five smaller pieces (see below)
+1. A bare page that shows my current to-dos (learning how FastAPI, templates and Tailwind fit together, with nothing that changes Gmail yet), in six smaller pieces (see below)
 2. The full-read step and urgency
 3. The "Sort new emails" button
 4. The Unsorted page
@@ -394,7 +394,8 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 - **The generated CSS stays out of Git.** Files a tool can rebuild are normally built where they're needed rather than stored. An online demo would build the CSS while deploying, so its styles always match the templates.
 - **Two terminals while building:** one runs the server, the other runs Tailwind, which rebuilds the CSS whenever a template changes.
 - **Reorganizing the rest of the project into folders waits until after Step 7,** as its own step, once every file exists. It needs care, because two mistakes would fail silently: `database.py` would create a new, empty database if it couldn't find `inbox_agent.db`, and `triage.py` would fall back to the example labels if it couldn't find `labels.json`.
-- **Piece 1 in five smaller pieces:** 1a the first page, 1b Tailwind, 1c the layout, 1d my to-dos from the database, 1e only the to-dos still in my inbox.
+- **Piece 1 in six smaller pieces:** 1a the first page, 1b Tailwind, 1c the layout, 1d my to-dos from the database, 1e only the to-dos still in my inbox, 1f a home page.
+- **A home page, as piece 1f.** Clicking "Inbox Agent" should open a summary rather than the Action needed page: how many to-dos and Unsorted emails are waiting, the replies drafted and waiting for me to send, and what the agent sorted lately. The very first line of this README promised a daily summary, and it had been folded into Action needed. Numbers that need later pieces, like the drafts, will say which piece they arrive in.
 
 **Piece 1a: the first page**
 - **Built:** `web/app.py`, a FastAPI app with one page at `/`, filled in from the template `web/templates/hello.html`. The page shows the time it was made.
@@ -461,6 +462,28 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - **The font was sent as an unknown file.** The server looks up each file's type from its extension in Python's list of types, and on this computer that list doesn't include `.woff2`, so the font went out as "application/octet-stream". Browsers coped, but one line in `web/app.py` now adds the type, and the font goes out as `font/woff2`.
   - **`--reload` got stuck in the background server I test with.** It noticed the change ("Reloading...") but the old server kept running with the old code. On Windows, uvicorn stops the old server with the same signal as pressing Ctrl+C in a console window, and a server started in the background has no console window, which is most likely why it never arrived. In a real terminal, the same command shut the old server down and started a new one within seconds. So `--reload` works the way I run the app, and a background test server needs a manual restart after Python changes.
 
+**Piece 1d: my to-dos from the database**
+- **Decided:**
+  - Every flagged email the agent left in the inbox is a to-do, whatever its age. The MCP server's `list_todos` only looks back 14 days: that would show 13 of my 62 and hide 49 that are still in my inbox. In 1e the MCP server switches to the same definition, so the page and Claude Desktop agree.
+  - One row per conversation. The 62 flagged emails come from 28 conversations, one of them with 16. The newest email decides what the row says, followed by "+15 more in this conversation".
+  - Each row has an amber "Action" or blue "Reply" tag, the to-do itself (what triage said to do, or "Reply to [name]"), and a gray line with the sender, subject, date and label. Newest first, until piece 2 sorts by urgency.
+  - The "Open in Gmail" link moves to 1e. I'm signed in to several Google accounts in Chrome, and a Gmail link opens the first one unless it names the account. The app should take the address from Gmail itself rather than from a file in Git, and connecting to Gmail is what 1e is for.
+- **Built:**
+  - `open_todos()` in `database.py`: the flagged emails the agent didn't archive, newest first.
+  - `todos_for_page()` in `web/app.py` groups them per conversation and works out what each row says, so the template only draws. Each page load opens its own database connection and closes it afterwards.
+  - `action.html` draws the list, or "Nothing needs you right now" when it's empty.
+- **Learned:**
+  - Python does the thinking, the template does the drawing: the page's function prepares plain values, and the template only loops over them.
+  - A SQLite connection only works on the thread that opened it, and FastAPI may handle each page load on a different thread, so every page load opens its own.
+  - Tests open the log read-only (`mode=ro`), so a test can never change it.
+- **Result:**
+  - The page shows 28 conversations, newest first, from 26 Oct back to 23 Sep: 26 with an Action tag and 5 with a Reply tag (3 have both), and 7 grouped, the biggest with "+15 more". All 62 emails are counted exactly once.
+  - The page is built in 27 ms, and the browser still loads nothing from outside.
+  - Long subjects wrap, so nothing sticks out sideways, on the PC or at phone width.
+  - With an empty list, the page says "Nothing needs you right now".
+  - Nothing changed in Gmail or the log, and it cost nothing: there are no Claude or Gmail calls.
+- **Found:** 39 of the 62 to-dos are over 30 days old. The inbox check in 1e will show how many of them I've already dealt with and archived myself.
+
 ## What's left
 
 - [x] **Step 1:** First call to Claude
@@ -491,8 +514,9 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 - [x] **Step 7, piece 1a:** the first page: a FastAPI app with one template, only reachable from my computer
 - [x] **Step 7, piece 1b:** Tailwind's standalone program, styling the page
 - [x] **Step 7, piece 1c:** the layout: menu bar and "Sort new emails" button
-- [ ] **Step 7, piece 1d:** my to-dos from the database
-- [ ] **Step 7, piece 1e:** only the to-dos still in my inbox, and what happens when the Gmail login has expired
+- [x] **Step 7, piece 1d:** my to-dos from the database
+- [ ] **Step 7, piece 1e:** only the to-dos still in my inbox, an "Open in Gmail" link that names my account, the same to-do list for the MCP server, and what happens when the Gmail login has expired
+- [ ] **Step 7, piece 1f:** a home page: what needs me, Unsorted emails, replies waiting to be sent, and what the agent did lately
 - [ ] **Step 7, piece 2:** the full-read step (Haiku, with Sonnet for unsure cases) and urgency
 - [ ] **Step 7, piece 3:** the "Sort new emails" button, with a summary of what arrived and what needs me
 - [ ] **Step 7, piece 4:** the Unsorted page: approve, edit or reject label suggestions, or pick a label by hand

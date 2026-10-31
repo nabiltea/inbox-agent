@@ -23,11 +23,15 @@ rebuilds the CSS every time a file is saved. (A public site would add --minify.)
 """
 
 import mimetypes
+from contextlib import closing
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+
+import database
 
 # This folder (web/). Building paths from this file's own location means they work
 # whatever folder the server is started from.
@@ -55,17 +59,61 @@ app.mount("/static", StaticFiles(directory=WEB_DIR / "static"), name="static")
 mimetypes.add_type("font/woff2", ".woff2")
 
 
+def show_date(iso_text):
+    """A date like "Fri 24 Oct", with the year added if it isn't this year."""
+    date = datetime.fromisoformat(iso_text)
+    text = f"{date:%a} {date.day} {date:%b}"
+    return text if date.year == datetime.now().year else f"{text} {date.year}"
+
+
+def todos_for_page(rows):
+    """Turn the flagged emails from the log into the rows of the to-do list: one per conversation.
+
+    Some conversations have many flagged emails, like a long back-and-forth with a buyer.
+    rows come newest first, so the first one seen for each conversation is its newest email,
+    and that one decides what the row says. "more" counts the conversation's other flagged
+    emails. Everything the template shows is worked out here, so the template only draws.
+    """
+    todos = {}
+    for row in rows:
+        if row["thread_id"] in todos:
+            todos[row["thread_id"]]["more"] += 1
+            continue
+        if row["needs_action"] and row["action"]:
+            text = row["action"]  # what triage said to do, like "Sign the contract on Dropbox Sign"
+        elif row["needs_reply"]:
+            text = f"Reply to {row['sender']}"
+        else:
+            text = row["subject"]
+        todos[row["thread_id"]] = {
+            "needs_action": bool(row["needs_action"]),
+            "needs_reply": bool(row["needs_reply"]),
+            "text": text,
+            "sender": row["sender"],
+            "subject": row["subject"],
+            "date": show_date(row["received_at"]),
+            "label": row["label"],
+            "more": 0,
+        }
+    return list(todos.values())  # a dictionary keeps the order things were added: newest first
+
+
 # @app.get("/") connects the function below it to the address "/", the home page. GET
 # means the browser only asks to see something. Anything that changes Gmail will use POST.
 # Each page passes "active", the name of its own function, so the menu can show which
 # page is open. url_for() in the templates builds the menu's links from the same names.
 @app.get("/")
 def action_needed(request: Request):
-    """Action needed: everything that needs a reply or an action from me. The to-dos arrive in piece 1d."""
+    """Action needed: everything that needs a reply or an action from me, one row per conversation."""
+    # A new database connection for every page load: FastAPI may handle each request on a
+    # different thread, and a SQLite connection only works on the thread that opened it.
+    # closing() closes it again afterwards, even if something goes wrong.
+    with closing(database.connect()) as conn:
+        rows = database.open_todos(conn)
     return templates.TemplateResponse(
         request=request,  # the browser's request, which templates need to build links
         name="action.html",
-        context={"active": "action_needed"},  # the values the template can use
+        context={"active": "action_needed", "todos": todos_for_page(rows)},  # the values the template can use
     )
 
 

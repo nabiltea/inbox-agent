@@ -4,8 +4,42 @@
 {% block title %}Action needed{% endblock %}
 
 {% block content %}
-  <h1 class="text-2xl font-semibold">Action needed</h1>
-  <div class="mt-4 rounded-lg bg-white p-6 shadow-sm">
-    <p class="text-gray-600">Your to-dos will appear here in piece 1d.</p>
+  <div class="flex items-baseline gap-3">
+    <h1 class="text-2xl font-semibold">Action needed</h1>
+    {% if todos %}
+      <span class="text-sm text-gray-600">{{ todos|length }} {{ "conversation" if todos|length == 1 else "conversations" }}</span>
+    {% endif %}
   </div>
+
+  {% if todos %}
+    {# One row per conversation, newest first. app.py has already worked out what each row says. #}
+    <ul class="mt-4 divide-y divide-gray-200 rounded-lg bg-white shadow-sm">
+      {% for todo in todos %}
+        <li class="flex items-start gap-4 px-5 py-4">
+          {# The tags. Each class name is written out in full, because Tailwind can't see names built from pieces. #}
+          <div class="flex w-16 shrink-0 flex-col items-start gap-1">
+            {% if todo.needs_action %}
+              <span class="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">Action</span>
+            {% endif %}
+            {% if todo.needs_reply %}
+              <span class="rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800">Reply</span>
+            {% endif %}
+          </div>
+          <div class="min-w-0">
+            <p class="font-medium">{{ todo.text }}</p>
+            <p class="mt-0.5 text-sm text-gray-500">
+              {{ todo.sender }} · {{ todo.subject }} · {{ todo.date }} · {{ todo.label }}
+              {% if todo.more %}
+                · <span class="text-blue-600">+{{ todo.more }} more in this conversation</span>
+              {% endif %}
+            </p>
+          </div>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <div class="mt-4 rounded-lg bg-white p-6 shadow-sm">
+      <p class="text-gray-600">Nothing needs you right now.</p>
+    </div>
+  {% endif %}
 {% endblock %}
