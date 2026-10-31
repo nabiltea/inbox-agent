@@ -37,8 +37,41 @@
     </div>
   </header>
 
-  {# Each page's own content goes into this slot #}
   <main class="mx-auto max-w-5xl px-6 py-8">
+    {# A message shown once, after signing in: green when it worked, red when it didn't #}
+    {% if message %}
+      <div class="mb-6 rounded-lg border px-5 py-4 text-sm {% if message.ok %}border-green-300 bg-green-50 text-green-900{% else %}border-red-300 bg-red-50 text-red-900{% endif %}" role="status">
+        {{ message.text }}
+      </div>
+    {% endif %}
+
+    {# Shown on any page that couldn't check Gmail. A page can add what that means for it
+       in the gmail_problem_note block, like Action needed's warning about its list. #}
+    {% if gmail_problem %}
+      <div class="mb-6 rounded-lg border border-amber-300 bg-amber-50 px-5 py-4 text-amber-900" role="status">
+        {% if gmail_problem == "sign_in" %}
+          <p class="font-medium">Gmail needs you to sign in again</p>
+          <p class="mt-1 text-sm">Google ends the app's login every 7 days while the app is in testing.</p>
+        {% elif gmail_problem == "offline" %}
+          <p class="font-medium">Couldn't reach Gmail</p>
+          <p class="mt-1 text-sm">Check your internet connection, then reload this page.</p>
+        {% elif gmail_problem == "google_problem" %}
+          <p class="font-medium">Gmail isn't answering right now</p>
+          <p class="mt-1 text-sm">Google has a temporary problem on its side, so there's nothing to fix on yours. Reload this page in a few minutes.</p>
+        {% endif %}
+        {% block gmail_problem_note %}{% endblock %}
+        {# A form, so the button sends a POST: starting a sign-in does something (see app.py) #}
+        {% if gmail_problem == "sign_in" %}
+          <form method="post" action="{{ url_for('sign_in').path }}" class="mt-3">
+            <button type="submit" class="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">
+              Sign in to Gmail
+            </button>
+          </form>
+        {% endif %}
+      </div>
+    {% endif %}
+
+    {# Each page's own content goes into this slot #}
     {% block content %}{% endblock %}
   </main>
 </body>

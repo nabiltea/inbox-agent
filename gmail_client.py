@@ -12,6 +12,7 @@ there would break the conversation.
 import base64
 import html
 import re
+import secrets
 import sys
 import time
 from dataclasses import dataclass
@@ -23,9 +24,11 @@ from pathlib import Path
 from google.auth.exceptions import RefreshError, TransportError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
+from google_auth_oauthlib.flow import Flow, InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+from httplib2 import HttpLib2Error
+from oauthlib.oauth2 import OAuth2Error
 
 PROJECT_DIR = Path(__file__).parent
 CREDENTIALS_FILE = PROJECT_DIR / "credentials.json"  # identifies this app to Google
@@ -65,6 +68,14 @@ class GoogleTemporaryError(RuntimeError):
     """Google answered, but with a temporary problem on its side. Trying again later should work."""
 
 
+class SignInFailedError(RuntimeError):
+    """Signing in didn't work. The message says why, for the person signing in."""
+
+
+class WrongAccountError(SignInFailedError):
+    """Someone signed in with a different Google account than the one the saved login belongs to."""
+
+
 def get_gmail_service(allow_browser_sign_in=True):
     """Log in to Gmail and return an object for making Gmail API calls.
 
@@ -82,6 +93,63 @@ def get_gmail_service(allow_browser_sign_in=True):
         creds = _sign_in()
     # cache_discovery=False switches off a cache this setup doesn't support (and its warning).
     return build("gmail", "v1", credentials=creds, cache_discovery=False)
+
+
+def start_web_sign_in(return_address):
+    """Start signing in from a web page. Returns Google's sign-in address and the sign-in in progress.
+
+    The page sends the browser to Google's address, and keeps the sign-in in progress
+    until Google sends the browser back to return_address with a one-time ticket. Then
+    finish_web_sign_in uses it. It holds the two protections Google's library makes:
+    a random code (the "state") that has to come back unchanged, and a secret (the PKCE
+    "code verifier") whose fingerprint goes to Google now, and which has to be shown
+    when trading the ticket for the login.
+    """
+    if not CREDENTIALS_FILE.exists():
+        raise SignInFailedError(
+            f"{CREDENTIALS_FILE.name} not found. Download it from Google Cloud Console "
+            "and put it in the project folder."
+        )
+    flow = Flow.from_client_secrets_file(CREDENTIALS_FILE, scopes=SCOPES, redirect_uri=return_address)
+    # prompt="consent" makes Google hand out a long-lasting login every time, not just the first.
+    google_address, state = flow.authorization_url(prompt="consent", **_account_hint())
+    return google_address, {"flow": flow, "state": state}
+
+
+def finish_web_sign_in(in_progress, answer):
+    """Finish a web sign-in with Google's answer, save the login, and return the address that signed in.
+
+    answer holds what Google put in the return address: the random code ("state"), and
+    either a one-time ticket ("code") or an error. When the sign-in can't be used, this
+    raises SignInFailedError with a message for the person signing in, and saves nothing.
+    """
+    # compare_digest takes as long however much of the code matches, so timing it can't
+    # reveal the code bit by bit. It compares bytes, so odd characters can't break it.
+    sent = in_progress["state"].encode() if in_progress else b""
+    if not sent or not secrets.compare_digest(answer.get("state", "").encode(), sent):
+        raise SignInFailedError("That sign-in had expired, so nothing was saved. Click Sign in to Gmail to start again.")
+    if answer.get("error") == "access_denied":
+        raise SignInFailedError("Sign-in was cancelled on Google's page, so nothing was saved.")
+    if "code" not in answer:
+        raise SignInFailedError(_google_refused(answer.get("error", "no ticket")))
+    flow = in_progress["flow"]
+    try:
+        flow.fetch_token(code=answer["code"])  # also shows Google the secret, so only this app can do it
+    except OAuth2Error as error:  # Google refused, for example because the ticket was already used
+        raise SignInFailedError(_google_refused(error.error)) from error
+    except OSError as error:  # no answer from Google
+        raise SignInFailedError(
+            "Couldn't reach Google to finish signing in, so nothing was saved. Check the internet connection and try again."
+        ) from error
+    return _save_login(flow.credentials).account
+
+
+def _google_refused(reason):
+    """The message for when Google doesn't accept a sign-in. Signing in from a terminal is the way out."""
+    return (
+        f"Google didn't accept the sign-in ({reason}), so nothing was saved. Try again, or run "
+        r".venv\Scripts\python show_inbox.py in the project folder."
+    )
 
 
 def list_recent_emails(service, max_results=20, label_id="INBOX"):
@@ -377,9 +445,45 @@ def _sign_in():
             "and put it in the project folder."
         )
     flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_FILE, SCOPES)
-    creds = flow.run_local_server(port=0)
+    creds = flow.run_local_server(port=0, prompt="consent", **_account_hint())
+    return _save_login(creds)
+
+
+def _save_login(creds):
+    """Check which account signed in, save the login noting that address, and return it.
+
+    token.json notes which account its login belongs to. A sign-in with a different
+    account is refused, because a wrong pick on Google's page would otherwise switch
+    the whole agent to another inbox. To switch accounts on purpose, delete token.json first.
+    """
+    try:
+        address = get_my_address(build("gmail", "v1", credentials=creds, cache_discovery=False))
+    except (HttpError, HttpLib2Error, OSError) as error:
+        raise SignInFailedError(
+            "Signed in, but Gmail couldn't say which account it was, so nothing was saved. Try again in a minute."
+        ) from error
+    expected = _saved_account()
+    if expected and address.lower() != expected.lower():
+        raise WrongAccountError(
+            f"You signed in as {address}, but this app is set up for {expected}, so nothing was saved. "
+            f"Sign in again and choose {expected}."
+        )
+    creds = creds.with_account(address)  # a field Google's library has for exactly this
     TOKEN_FILE.write_text(creds.to_json())
     return creds
+
+
+def _saved_account():
+    """The Gmail address the saved login belongs to, or None if there's no login or it doesn't say."""
+    if not TOKEN_FILE.exists():
+        return None
+    return Credentials.from_authorized_user_file(TOKEN_FILE).account or None
+
+
+def _account_hint():
+    """Tells Google's sign-in page which account to select: the one the saved login belongs to."""
+    account = _saved_account()
+    return {"login_hint": account} if account else {}
 
 
 # Where the quoted older message starts in a reply. Everything from there on was

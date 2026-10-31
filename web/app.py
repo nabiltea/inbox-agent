@@ -28,11 +28,20 @@ from datetime import datetime
 from pathlib import Path
 
 from fastapi import FastAPI, Request
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 import database
-from gmail_client import GoogleTemporaryError, GoogleUnreachableError, SignInNeededError, get_gmail_service
+from gmail_client import (
+    GoogleTemporaryError,
+    GoogleUnreachableError,
+    SignInFailedError,
+    SignInNeededError,
+    finish_web_sign_in,
+    get_gmail_service,
+    start_web_sign_in,
+)
 
 # This folder (web/). Building paths from this file's own location means they work
 # whatever folder the server is started from.
@@ -58,6 +67,16 @@ app.mount("/static", StaticFiles(directory=WEB_DIR / "static"), name="static")
 # Python's list of types. That list doesn't include .woff2 (the font) on this computer,
 # so the font was sent as an unknown file, "application/octet-stream". This adds it.
 mimetypes.add_type("font/woff2", ".woff2")
+
+# Kept in the server's memory from one page load to the next. The app has one user, so
+# one of each is enough: the sign-in in progress, until Google sends the browser back,
+# and a message to show once on the next page. pop() takes a value out in one step, so
+# two page loads at the same moment can't both get it.
+_waiting = {}
+
+# Where signing in ends, whether it worked or not: the address behind "Inbox Agent" in
+# the top bar. That's Action needed for now, and the home page once piece 1f is built.
+HOME = "/"
 
 
 def show_date(iso_text):
@@ -142,6 +161,7 @@ def action_needed(request: Request):
             "active": "action_needed",
             "todos": todos_for_page(rows),
             "gmail_problem": gmail_problem,  # None, or why Gmail couldn't be checked
+            "message": _waiting.pop("message", None),  # shown once, after signing in
         },
     )
 
@@ -156,3 +176,35 @@ def unsorted(request: Request):
 def history(request: Request):
     """History: past runs, what was sorted where, and undo. A placeholder until piece 5."""
     return templates.TemplateResponse(request=request, name="history.html", context={"active": "history"})
+
+
+# Signing in to Gmail from the page. The button sends the browser to Google's sign-in
+# page, and Google sends it back to /sign-in/callback with a one-time ticket that
+# gmail_client.py trades for the login. Both end with a redirect: an answer that tells
+# the browser to go to another address, which it does by itself. 303 is the standard
+# redirect after a POST: it tells the browser to load the new address normally.
+@app.post("/sign-in")
+def sign_in(request: Request):
+    """The "Sign in to Gmail" button: send the browser to Google's sign-in page.
+
+    A POST, because it does something: it starts a sign-in and remembers its protections.
+    """
+    try:
+        google_address, in_progress = start_web_sign_in(str(request.url_for("sign_in_callback")))
+    except SignInFailedError as error:
+        _waiting["message"] = {"ok": False, "text": str(error)}
+        return RedirectResponse(HOME, status_code=303)
+    _waiting["sign_in"] = in_progress  # replaces any earlier attempt, which then stops working
+    return RedirectResponse(google_address, status_code=303)
+
+
+@app.get("/sign-in/callback")
+def sign_in_callback(request: Request):
+    """Where Google sends the browser back after its sign-in page, with a one-time ticket or an error."""
+    in_progress = _waiting.pop("sign_in", None)  # so each attempt can be used only once
+    try:
+        address = finish_web_sign_in(in_progress, dict(request.query_params))
+        _waiting["message"] = {"ok": True, "text": f"Signed in to Gmail as {address}."}
+    except SignInFailedError as error:
+        _waiting["message"] = {"ok": False, "text": str(error)}
+    return RedirectResponse(HOME, status_code=303)

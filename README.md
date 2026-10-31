@@ -517,9 +517,31 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - With my real expired login, the page shows the sign-in notice above all 28 rows. No sign-in window opened, and the failed attempts didn't change `token.json`.
   - On a test server, every situation shows the right notice: no internet, a Google outage with a proper "temporary" answer, a Google outage with an error page, a refused login, a missing login file, and a working login (no notice). Four page loads at the same moment each took about 0.25 seconds, the same as one alone, so they didn't wait for each other.
   - During an outage, the scripts now stop with "Google has a temporary problem on its side" instead of opening a sign-in window that couldn't help, and the MCP server tells Claude the same.
-  - While the login is expired, a page load takes about 0.25 seconds instead of 27 ms, because the page asks Google each time. When Google answers "temporary", it takes about 3 seconds, because Google's library tries 3 times before giving up. The time with a working login gets measured once I've signed in, in part 2.
+  - While the login is expired, a page load takes about 0.25 seconds instead of 27 ms, because the page asks Google each time. When Google answers "temporary", it takes about 3 seconds, because Google's library tries 3 times before giving up. The time with a working login is in part 2.
   - Nothing sticks out sideways, on the PC or at phone width.
 - **Found and fixed:** my first version treated every refusal from Google as an ended login, so a Google outage would have told me to sign in again. Checking only the library's "retryable" mark wasn't enough either. When Google's servers send back an error web page instead of a proper answer, which is typical during outages, the library marks it as not temporary, even after a 503 it had just retried. Faked answers confirmed it: the library said "not temporary" to both error pages I tried. So `gmail_client.py` also checks whether the answer is a web page (it starts with a tag like `<html>`). Anything else still counts as an ended login: when unsure, it's better to be asked to sign in than to be told to wait for nothing.
+
+**Piece 1e, part 2: signing in from the page**
+- **Decided:**
+  - **The app remembers which account it belongs to.** token.json notes the address of the account its login belongs to, in a field Google's library has for exactly that. Google's sign-in page then has that account selected, and a different account is refused. A wrong pick would otherwise switch the whole agent, sorting included, to another inbox, and my Chrome uses another Google account by default. show_inbox.py's sign-in gets the same check. To switch accounts on purpose, I delete token.json first.
+  - **The notice only shows the button.** When signing in through the page fails in a way the button can't fix, the message mentions the terminal command.
+  - **A real button that sends a POST,** because starting a sign-in does something: the app creates and remembers the random code and the secret. Browsers sometimes open links ahead of time, but they never press buttons by themselves.
+  - **Signing in ends on the address behind "Inbox Agent",** whether it worked or not, with a message shown once: green with the account's address, or red with what went wrong. That's Action needed for now, and the home page once piece 1f is built. So the notice and the messages moved into the shared layout, where any page can show them.
+  - Google is asked for a long-lasting login every time (`prompt=consent`), as its docs advise.
+- **Built:**
+  - `start_web_sign_in()` and `finish_web_sign_in()` in `gmail_client.py`: the trip to Google's sign-in page and back. The second one checks the random code, trades Google's one-time ticket for the login, checks the account and saves the login.
+  - Two new addresses in `web/app.py`: `/sign-in` (the button) and `/sign-in/callback` (where Google sends the browser back). In between, the sign-in in progress waits in the server's memory, and each attempt can be used once.
+  - The notice and the one-time message in `base.html`. Action needed adds its own line about the list.
+- **Learned:**
+  - How "Sign in with Google" (OAuth) works: the app sends me to Google, Google checks it's me and asks whether the app may use my Gmail, then sends me back with a one-time ticket. The app trades the ticket for the login directly with Google, so it never sees my password.
+  - The two protections, both made by Google's library. A random code (the "state") has to come back unchanged, so no other website can slip its own ticket in. And a secret whose fingerprint goes to Google first (PKCE) has to be shown when trading the ticket, so a ticket stolen on the way back is useless to anyone else.
+  - A redirect is an answer that tells the browser to go to another address, which it does by itself. 303 is the standard redirect after a POST.
+  - Google checks the return address before it shows its sign-in page. With my app's address, Google showed its normal sign-in page; with a made-up one, "Error 400: redirect_uri_mismatch". So the login setup I already had (a "Desktop app" client) works, with nothing to change in Google Cloud.
+- **Result:**
+  - 16 tests with a faked Google, all passed: the button's trip to Google (random code, fingerprint, long-lasting login, pre-selected account), refusing a return with no attempt in progress, a wrong code or a reused one, Cancel, a refused ticket, no internet, an account that can't be checked, a different account (in show_inbox.py too), and a successful sign-in, with the green message shown once. No failed case saved anything, and the real token.json was never touched.
+  - The 12 tests from part 1 still pass.
+  - **The real thing:** I signed in with the button in Chrome. I came back to a green "Signed in to Gmail as …", token.json now notes my account and holds a long-lasting login, and the notice is gone.
+  - With a working login, a page load takes about 7 ms, so a new connection for every page load costs almost nothing. Once an hour, when the short-lived access key runs out, one page load renews it with a round trip to Google, about a quarter of a second.
 
 ## What's left
 
@@ -554,7 +576,7 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 - [x] **Step 7, piece 1d:** my to-dos from the database
 - [ ] **Step 7, piece 1e:** only the to-dos still in my inbox, in five parts:
   - [x] part 1: a new Gmail connection for every page load, and a notice when Gmail can't be checked
-  - [ ] part 2: a "Sign in to Gmail" button on the page
+  - [x] part 2: a "Sign in to Gmail" button on the page, which only accepts my own account
   - [ ] part 3: the inbox check, in a shared `todos.py`
   - [ ] part 4: an "Open in Gmail" link that names my account
   - [ ] part 5: Claude Desktop's `list_todos` uses the same list and connects fresh for every tool call
@@ -580,7 +602,7 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 | File | What it does |
 |---|---|
 | `hello_claude.py` | Step 1: first call to Claude |
-| `gmail_client.py` | All Gmail code: login, fetch emails |
+| `gmail_client.py` | All Gmail code: login (also from the web page), fetch emails |
 | `show_inbox.py` | Step 2: prints the 20 newest inbox emails |
 | `triage.py` | Step 3: sorts emails with Claude Haiku, flags replies and actions, suggests labels (dry run) |
 | `label_designer.py` | Step 4: Claude Opus suggests a label set from my inbox and existing labels |
@@ -622,4 +644,4 @@ Not in Git: `.env` (API key), `credentials.json` (Google app file), `token.json`
 14. Run `python drafter.py --search "from:someone@example.com"` to draft a reply to the newest matching email. Add `--note "what to say"` to tell it what you want, and `--save` to save the approved reply as a Gmail draft. Without `--save`, nothing changes in Gmail. A draft costs roughly $0.05 to $0.20. The Microsoft Store version of Claude keeps it in `%LOCALAPPDATA%\Claude-Data\<app folder>\`, not `%APPDATA%\Claude\` as many guides say. The file is a database, not text, so VS Code can't open it on its own.
 15. Get Tailwind's program, once per computer. In a browser, open github.com/tailwindlabs/tailwindcss/releases/tag/v4.3.3 and, under **Assets**, download `tailwindcss-windows-x64.exe` and `sha256sums.txt`. Create a `tools` folder in the project, move the program into it and rename it `tailwindcss.exe`. Then check that it's the genuine file: run `Get-FileHash tools\tailwindcss.exe` in PowerShell and compare the Hash with the line for `tailwindcss-windows-x64.exe` in `sha256sums.txt`. Only use the program if they're the same.
 16. Build the page's CSS with `tools\tailwindcss.exe -i web/tailwind.css -o web/static/app.css`. While editing templates, add `--watch` and leave it running in a second terminal, so the CSS is rebuilt every time a file is saved.
-17. Start the web page from the project folder with `python -m uvicorn web.app:app --reload`, then open http://127.0.0.1:8000 in a browser. Only this computer can open it. Stop it with Ctrl+C.
+17. Start the web page from the project folder with `python -m uvicorn web.app:app --reload`, then open http://127.0.0.1:8000 in a browser. Only this computer can open it. Stop it with Ctrl+C. When the page says Gmail needs you to sign in again, click **Sign in to Gmail** on it. The app only accepts the Google account its login was first made with, so to switch accounts on purpose, delete `token.json` first.

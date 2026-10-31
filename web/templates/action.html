@@ -3,6 +3,11 @@
 
 {% block title %}Action needed{% endblock %}
 
+{# Added to the Gmail notice in base.html when Gmail couldn't be checked #}
+{% block gmail_problem_note %}
+  <p class="mt-1 text-sm">Until then, this list may include emails you've already archived.</p>
+{% endblock %}
+
 {% block content %}
   <div class="flex items-baseline gap-3">
     <h1 class="text-2xl font-semibold">Action needed</h1>
@@ -10,27 +15,6 @@
       <span class="text-sm text-gray-600">{{ todos|length }} {{ "conversation" if todos|length == 1 else "conversations" }}</span>
     {% endif %}
   </div>
-
-  {# Shown when Gmail couldn't be checked. The list below then comes from the log alone. #}
-  {% if gmail_problem %}
-    <div class="mt-4 rounded-lg border border-amber-300 bg-amber-50 px-5 py-4 text-amber-900" role="status">
-      {% if gmail_problem == "sign_in" %}
-        <p class="font-medium">Gmail needs you to sign in again</p>
-        <p class="mt-1 text-sm">
-          Google ends the app's login every 7 days while the app is in testing. To sign in, run
-          <code class="rounded bg-amber-100 px-1 font-mono">.venv\Scripts\python show_inbox.py</code>
-          in the project folder, then reload this page.
-        </p>
-      {% elif gmail_problem == "offline" %}
-        <p class="font-medium">Couldn't reach Gmail</p>
-        <p class="mt-1 text-sm">Check your internet connection, then reload this page.</p>
-      {% elif gmail_problem == "google_problem" %}
-        <p class="font-medium">Gmail isn't answering right now</p>
-        <p class="mt-1 text-sm">Google has a temporary problem on its side, so there's nothing to fix on yours. Reload this page in a few minutes.</p>
-      {% endif %}
-      <p class="mt-1 text-sm">Until then, this list may include emails you've already archived.</p>
-    </div>
-  {% endif %}
 
   {% if todos %}
     {# One row per conversation, newest first. app.py has already worked out what each row says. #}
