@@ -3,8 +3,8 @@
 A FastAPI app that runs on my own computer. Each address, like "/", is a Python
 function, and each page is an HTML template in web/templates/ that the function
 fills in. There are three pages, Action needed, Unsorted and History, which share
-one layout with the menu (web/templates/base.html). For now they only say what's
-coming.
+one layout with the menu (web/templates/base.html). Action needed lists my to-dos.
+The other two say which piece they arrive in.
 
 Start it from the project folder with:
   python -m uvicorn web.app:app --reload
@@ -32,6 +32,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 import database
+from gmail_client import GoogleTemporaryError, GoogleUnreachableError, SignInNeededError, get_gmail_service
 
 # This folder (web/). Building paths from this file's own location means they work
 # whatever folder the server is started from.
@@ -98,6 +99,27 @@ def todos_for_page(rows):
     return list(todos.values())  # a dictionary keeps the order things were added: newest first
 
 
+def connect_to_gmail():
+    """Make a new Gmail connection for this page load, or say why it can't be made.
+
+    Every page load makes its own connection instead of sharing one: FastAPI may handle
+    two page loads at the same time, and Google's library can't be used by two at once.
+    A new connection also reads token.json again, so a new sign-in works straight away.
+
+    Returns (connection, None), or (None, problem), where problem is "sign_in" if Google
+    has ended the login, "offline" if Google couldn't be reached, or "google_problem" if
+    Google has a temporary problem on its side.
+    """
+    try:
+        return get_gmail_service(allow_browser_sign_in=False), None
+    except SignInNeededError:
+        return None, "sign_in"
+    except GoogleUnreachableError:
+        return None, "offline"
+    except GoogleTemporaryError:
+        return None, "google_problem"
+
+
 # @app.get("/") connects the function below it to the address "/", the home page. GET
 # means the browser only asks to see something. Anything that changes Gmail will use POST.
 # Each page passes "active", the name of its own function, so the menu can show which
@@ -105,6 +127,9 @@ def todos_for_page(rows):
 @app.get("/")
 def action_needed(request: Request):
     """Action needed: everything that needs a reply or an action from me, one row per conversation."""
+    # The Gmail connection isn't used yet: the inbox check comes in part 3 of piece 1e.
+    # For now, connecting tells the page whether Gmail can be reached, for the notice.
+    gmail, gmail_problem = connect_to_gmail()
     # A new database connection for every page load: FastAPI may handle each request on a
     # different thread, and a SQLite connection only works on the thread that opened it.
     # closing() closes it again afterwards, even if something goes wrong.
@@ -113,7 +138,11 @@ def action_needed(request: Request):
     return templates.TemplateResponse(
         request=request,  # the browser's request, which templates need to build links
         name="action.html",
-        context={"active": "action_needed", "todos": todos_for_page(rows)},  # the values the template can use
+        context={  # the values the template can use
+            "active": "action_needed",
+            "todos": todos_for_page(rows),
+            "gmail_problem": gmail_problem,  # None, or why Gmail couldn't be checked
+        },
     )
 
 

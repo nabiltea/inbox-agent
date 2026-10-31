@@ -2,7 +2,7 @@
 
 An AI agent that organizes my Gmail. It sorts every email into labels, flags the emails that need a reply or an action from me, drafts replies, and shows everything on a web page with a daily summary. Several Claude models work together, each with its own job, and nothing is ever sent without my approval.
 
-**Status:** Steps 1 to 4 done. The agent sorts each email into one of 15 labels designed by Claude Opus and reviewed by me, flags what needs a reply or an action, and suggests new labels for emails that fit none. It adds the labels in Gmail and archives sorted emails, so the inbox only holds what still needs me. It records every decision in a database, so it never sorts the same email twice and any run can be undone. **It sorted my whole backlog with the Message Batches API: 6,547 emails for $1.54, taking the inbox from 6,494 emails to 60.** Step 5 is built: my own Gmail MCP server, whose tools can search and read emails, list my to-dos and save reply drafts, but never send, delete or archive. It works in Claude Desktop. Step 6 is built: a Drafter agent (Claude Sonnet) that writes replies in my style, using a writing-style file learned from my sent emails and the MCP server's tools, and a Critic (Claude Opus) that checks every draft before it can be saved. **Now: Step 7, the web page:** a FastAPI app with HTML templates, HTMX and Tailwind, with Action needed, Unsorted and History pages, and a two-stage read so that actions come with exact steps, links and deadlines. The first pieces are built: the web app runs on my computer, where only I can open it, with a shared layout (a menu for its three pages and the "Sort new emails" button), styled with Tailwind and the Inter font. The Action needed page lists my real to-dos from the agent's log, one row per conversation.
+**Status:** Steps 1 to 4 done. The agent sorts each email into one of 15 labels designed by Claude Opus and reviewed by me, flags what needs a reply or an action, and suggests new labels for emails that fit none. It adds the labels in Gmail and archives sorted emails, so the inbox only holds what still needs me. It records every decision in a database, so it never sorts the same email twice and any run can be undone. **It sorted my whole backlog with the Message Batches API: 6,547 emails for $1.54, taking the inbox from 6,494 emails to 60.** Step 5 is built: my own Gmail MCP server, whose tools can search and read emails, list my to-dos and save reply drafts, but never send, delete or archive. It works in Claude Desktop. Step 6 is built: a Drafter agent (Claude Sonnet) that writes replies in my style, using a writing-style file learned from my sent emails and the MCP server's tools, and a Critic (Claude Opus) that checks every draft before it can be saved. **Now: Step 7, the web page:** a FastAPI app with HTML templates, HTMX and Tailwind, with Action needed, Unsorted and History pages, and a two-stage read so that actions come with exact steps, links and deadlines. The first pieces are built: the web app runs on my computer, where only I can open it, with a shared layout (a menu for its three pages and the "Sort new emails" button), styled with Tailwind and the Inter font. The Action needed page lists my real to-dos from the agent's log, one row per conversation, and says so when the Gmail login has expired or Gmail can't be reached.
 
 ## How it works
 
@@ -484,6 +484,43 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - Nothing changed in Gmail or the log, and it cost nothing: there are no Claude or Gmail calls.
 - **Found:** 39 of the 62 to-dos are over 30 days old. The inbox check in 1e will show how many of them I've already dealt with and archived myself.
 
+**Piece 1e: only the to-dos still in my inbox (in progress)**
+- **Decided:**
+  - **A to-do is a flagged email that's still in my inbox.** When someone replies to a conversation I've archived, Gmail puts the conversation back in my inbox, but only the new email gets the inbox label. So the old to-do stays done, and the reply becomes a to-do only if triage flags it on the next run.
+  - **One question to Gmail per page load:** "which emails are in my inbox?" (5 quota units per 500 emails), checked against the flagged emails in the log. Asking about each flagged email separately, as the MCP server does now, would cost 1,240 units for 62 emails, a fifth of the 6,000 units Gmail allows per minute.
+  - **A new Gmail connection for every page load,** rather than one shared connection that page loads take turns with. Page loads never wait for each other, and a dead login can't stick around, so after signing in again the next page load just works. Google's own example web app works this way. The cost is a moment of connecting on every page load.
+  - **When Gmail can't be checked,** the page still shows the list from the log, with a notice that says what went wrong and what to do. It never opens a sign-in window by itself.
+  - **Signing in again from the page,** with a "Sign in to Gmail" button, instead of running a command in a terminal every week. Google sends me back to the app, which saves the new login. It uses the standard protection against faked sign-in answers, a random code that has to come back with Google's answer, which Google's library has built in.
+  - **"Open in Gmail" links that name my account** with Gmail's `authuser` setting. The app gets my address from Gmail, never from a file. A small link at the right of each row opens the conversation in a new tab.
+  - **One definition of a to-do, in a new `todos.py`,** used by both the page and the MCP server, so Claude Desktop sees exactly what the page shows: one entry per conversation, with no 14-day limit.
+  - **Five parts:** 1 the connection and the notice, 2 the sign-in button, 3 the inbox check, 4 the Gmail link, 5 Claude Desktop's list.
+- **Found while planning:**
+  - **Gmail's request limits changed on 1 May 2026.** New Google Cloud projects get 6,000 quota units per user per minute, and fetching one email now costs 20 units.
+  - **The MCP server holds on to a dead login.** Making a Gmail connection doesn't check the login; the first request does. The MCP server connects once, keeps that connection, and only handles login problems while connecting. So once Google ended the login, signing in again wouldn't help until Claude Desktop restarted. Part 5 makes it connect fresh for every tool call.
+  - My Gmail login had just expired, so part 1 could be tested on the real thing.
+
+**Piece 1e, part 1: a new Gmail connection, and a notice when there isn't one**
+- **Built:**
+  - `connect_to_gmail()` in `web/app.py` makes a new Gmail connection for each page load, or says why it can't. The connection itself gets used from part 3 on.
+  - `action.html` shows an amber notice above the list, with one of three messages. Each one warns that the list may include emails I've already archived.
+    - "Gmail needs you to sign in again" when the login has ended, with the command to run.
+    - "Couldn't reach Gmail" when there's no internet.
+    - "Gmail isn't answering right now" when Google has a temporary problem on its side.
+  - `gmail_client.py` has three errors of its own, one per situation: `SignInNeededError`, `GoogleUnreachableError` and `GoogleTemporaryError`. So the rest of the project never deals with Google's own error types, as that file promises. All three are `RuntimeError`s, which the MCP server already catches.
+- **Learned:**
+  - A page that talks to another service has to plan for that service failing. Reading a file on my PC either works or it doesn't, but asking Google can fail in several ways, and each needs its own message.
+  - Google's library reports these failures in different ways. No internet is a `TransportError`. A refused login renewal is a `RefreshError`, marked "retryable" when Google says the problem is temporary.
+  - Making a connection doesn't check the login. Renewing the short-lived access key the connection carries (it lasts an hour) does, and with a new connection per page load, that happens while connecting.
+  - Python's convention is to end error names with "Error".
+  - A test can run the real app on its own server inside the test script and "patch" parts of the code, to fake situations that can't happen on demand, like having no internet or a Google outage.
+- **Result:**
+  - With my real expired login, the page shows the sign-in notice above all 28 rows. No sign-in window opened, and the failed attempts didn't change `token.json`.
+  - On a test server, every situation shows the right notice: no internet, a Google outage with a proper "temporary" answer, a Google outage with an error page, a refused login, a missing login file, and a working login (no notice). Four page loads at the same moment each took about 0.25 seconds, the same as one alone, so they didn't wait for each other.
+  - During an outage, the scripts now stop with "Google has a temporary problem on its side" instead of opening a sign-in window that couldn't help, and the MCP server tells Claude the same.
+  - While the login is expired, a page load takes about 0.25 seconds instead of 27 ms, because the page asks Google each time. When Google answers "temporary", it takes about 3 seconds, because Google's library tries 3 times before giving up. The time with a working login gets measured once I've signed in, in part 2.
+  - Nothing sticks out sideways, on the PC or at phone width.
+- **Found and fixed:** my first version treated every refusal from Google as an ended login, so a Google outage would have told me to sign in again. Checking only the library's "retryable" mark wasn't enough either. When Google's servers send back an error web page instead of a proper answer, which is typical during outages, the library marks it as not temporary, even after a 503 it had just retried. Faked answers confirmed it: the library said "not temporary" to both error pages I tried. So `gmail_client.py` also checks whether the answer is a web page (it starts with a tag like `<html>`). Anything else still counts as an ended login: when unsure, it's better to be asked to sign in than to be told to wait for nothing.
+
 ## What's left
 
 - [x] **Step 1:** First call to Claude
@@ -515,13 +552,20 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 - [x] **Step 7, piece 1b:** Tailwind's standalone program, styling the page
 - [x] **Step 7, piece 1c:** the layout: menu bar and "Sort new emails" button
 - [x] **Step 7, piece 1d:** my to-dos from the database
-- [ ] **Step 7, piece 1e:** only the to-dos still in my inbox, an "Open in Gmail" link that names my account, the same to-do list for the MCP server, and what happens when the Gmail login has expired
+- [ ] **Step 7, piece 1e:** only the to-dos still in my inbox, in five parts:
+  - [x] part 1: a new Gmail connection for every page load, and a notice when Gmail can't be checked
+  - [ ] part 2: a "Sign in to Gmail" button on the page
+  - [ ] part 3: the inbox check, in a shared `todos.py`
+  - [ ] part 4: an "Open in Gmail" link that names my account
+  - [ ] part 5: Claude Desktop's `list_todos` uses the same list and connects fresh for every tool call
 - [ ] **Step 7, piece 1f:** a home page: what needs me, Unsorted emails, replies waiting to be sent, and what the agent did lately
 - [ ] **Step 7, piece 2:** the full-read step (Haiku, with Sonnet for unsure cases) and urgency
 - [ ] **Step 7, piece 3:** the "Sort new emails" button, with a summary of what arrived and what needs me
 - [ ] **Step 7, piece 4:** the Unsorted page: approve, edit or reject label suggestions, or pick a label by hand
 - [ ] **Step 7, piece 5:** the History page: past runs, undo, and a "Needs action" button
 - [ ] **Step 7, piece 6:** the draft flow: "Draft reply" with a hints box, the Critic's verdict, and saving to Gmail drafts, also when the Critic isn't satisfied
+- [ ] A double-click shortcut that starts the web page, so opening it doesn't need VS Code
+- [ ] Decide whether to move the Google app from "Testing" to "In production", which would end the weekly sign-in (first check Google's rules for unverified apps that use Gmail)
 - [ ] Reorganize the project into folders, as its own step after Step 7, with one setting for where the data files live
 - [ ] Learn from my edits: compare each draft with what I actually sent, and have Claude suggest updates to the writing-style file for me to approve
 - [ ] Demo mode with made-up emails, safe to show in interviews and maybe online, together with using the project on both my PC and my laptop (a "To do" Gmail label, with Gmail as the source of truth)

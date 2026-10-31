@@ -20,7 +20,7 @@ from email.message import EmailMessage
 from email.utils import formataddr, getaddresses, parseaddr
 from pathlib import Path
 
-from google.auth.exceptions import RefreshError
+from google.auth.exceptions import RefreshError, TransportError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -51,17 +51,34 @@ class Email:
     label_ids: list[str]  # the labels the email already has, including Gmail's own like INBOX
 
 
+# Errors of this file's own, so the rest of the project can tell what went wrong without
+# knowing Google's libraries. All three are RuntimeErrors, which the MCP server catches.
+class SignInNeededError(RuntimeError):
+    """There's no working Gmail login, and this program can't open a browser to sign in."""
+
+
+class GoogleUnreachableError(RuntimeError):
+    """Google couldn't be reached at all, usually because there's no internet."""
+
+
+class GoogleTemporaryError(RuntimeError):
+    """Google answered, but with a temporary problem on its side. Trying again later should work."""
+
+
 def get_gmail_service(allow_browser_sign_in=True):
     """Log in to Gmail and return an object for making Gmail API calls.
 
-    If the saved login doesn't work, this opens a browser to sign in again, unless
-    allow_browser_sign_in is False. The MCP server runs in the background, where
-    nobody would see the browser, so it asks you to sign in from a script instead.
+    If the saved login doesn't work, this opens a browser to sign in again. With
+    allow_browser_sign_in=False it raises SignInNeededError instead: the MCP server
+    runs in the background, where nobody would see the browser, and the web page
+    shouldn't open one by itself. When Google can't be asked about the login right
+    now, it raises GoogleUnreachableError or GoogleTemporaryError, because signing in
+    again wouldn't help.
     """
     creds = _load_saved_login()
     if creds is None:
         if not allow_browser_sign_in:
-            raise RuntimeError("The Gmail login has expired. Run 'python show_inbox.py' once to sign in again.")
+            raise SignInNeededError("The Gmail login has expired. Run 'python show_inbox.py' once to sign in again.")
         creds = _sign_in()
     # cache_discovery=False switches off a cache this setup doesn't support (and its warning).
     return build("gmail", "v1", credentials=creds, cache_discovery=False)
@@ -314,7 +331,12 @@ def build_reply(messages, my_address, body, reply_all=False):
 
 
 def _load_saved_login():
-    """Return the saved login if it still works, otherwise None."""
+    """Return the saved login if it still works, otherwise None.
+
+    Renewing the login means asking Google, which can fail without the login being at
+    fault. Then this raises GoogleUnreachableError or GoogleTemporaryError instead of
+    returning None, so nobody gets asked to sign in for nothing.
+    """
     if not TOKEN_FILE.exists():
         return None
     creds = Credentials.from_authorized_user_file(TOKEN_FILE)
@@ -324,10 +346,27 @@ def _load_saved_login():
         return creds
     try:
         creds.refresh(Request())
-    except RefreshError:
+    except TransportError as error:  # the request never got an answer
+        raise GoogleUnreachableError("Couldn't reach Google. Check the internet connection.") from error
+    except RefreshError as error:  # Google answered, but refused to renew the login
+        if _is_temporary_refusal(error):
+            raise GoogleTemporaryError("Google has a temporary problem on its side. Try again in a few minutes.") from error
         return None  # Google ended the login (every 7 days while the app is in testing)
     TOKEN_FILE.write_text(creds.to_json())
     return creds
+
+
+def _is_temporary_refusal(error):
+    """True if Google refused to renew the login because of a problem on its own side.
+
+    Google's library marks server errors and "try again later" answers as retryable,
+    after trying 3 times itself. But when Google's servers send back an error web page
+    instead of a proper answer, as can happen during an outage, the library doesn't
+    mark it, so that's checked here too. Anything else counts as an ended login: when
+    unsure, it's better to ask me to sign in than to tell me to wait for nothing.
+    """
+    answer = str(error.args[0]) if error.args else ""
+    return error.retryable or answer.lstrip().startswith("<")  # a web page starts with a tag, like <html>
 
 
 def _sign_in():
