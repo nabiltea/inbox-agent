@@ -2,7 +2,7 @@
 
 An AI agent that organizes my Gmail. It sorts every email into labels, flags the emails that need a reply or an action from me, drafts replies, and shows everything on a web page with a daily summary. Several Claude models work together, each with its own job, and nothing is ever sent without my approval.
 
-**Status:** Steps 1 to 4 done. The agent sorts each email into one of 15 labels designed by Claude Opus and reviewed by me, flags what needs a reply or an action, and suggests new labels for emails that fit none. It adds the labels in Gmail and archives sorted emails, so the inbox only holds what still needs me. It records every decision in a database, so it never sorts the same email twice and any run can be undone. **It sorted my whole backlog with the Message Batches API: 6,547 emails for $1.54, taking the inbox from 6,494 emails to 60.** Step 5 is built: my own Gmail MCP server, whose tools can search and read emails, list my to-dos and save reply drafts, but never send, delete or archive. It works in Claude Desktop. Step 6 is built: a Drafter agent (Claude Sonnet) that writes replies in my style, using a writing-style file learned from my sent emails and the MCP server's tools, and a Critic (Claude Opus) that checks every draft before it can be saved. **Next: Step 7, the web page.** It's planned and not started: a FastAPI app with HTML, HTMX and Tailwind, with Action needed, Unsorted and History pages, and a two-stage read so that actions come with exact steps, links and deadlines.
+**Status:** Steps 1 to 4 done. The agent sorts each email into one of 15 labels designed by Claude Opus and reviewed by me, flags what needs a reply or an action, and suggests new labels for emails that fit none. It adds the labels in Gmail and archives sorted emails, so the inbox only holds what still needs me. It records every decision in a database, so it never sorts the same email twice and any run can be undone. **It sorted my whole backlog with the Message Batches API: 6,547 emails for $1.54, taking the inbox from 6,494 emails to 60.** Step 5 is built: my own Gmail MCP server, whose tools can search and read emails, list my to-dos and save reply drafts, but never send, delete or archive. It works in Claude Desktop. Step 6 is built: a Drafter agent (Claude Sonnet) that writes replies in my style, using a writing-style file learned from my sent emails and the MCP server's tools, and a Critic (Claude Opus) that checks every draft before it can be saved. **Now: Step 7, the web page:** a FastAPI app with HTML templates, HTMX and Tailwind, with Action needed, Unsorted and History pages, and a two-stage read so that actions come with exact steps, links and deadlines. The first small piece is built: the web app runs on my computer, where only I can open it, and serves its first page.
 
 ## How it works
 
@@ -22,7 +22,7 @@ flowchart TD
     A --> W
 ```
 
-Built so far: `gmail_client.py`, Triage (including applying labels in Gmail), the Label Designer, the SQLite log, the backlog sorter, the Gmail MCP server, the Drafter and the Critic. The web page is planned.
+Built so far: `gmail_client.py`, Triage (including applying labels in Gmail), the Label Designer, the SQLite log, the backlog sorter, the Gmail MCP server, the Drafter and the Critic. The web page is in progress.
 
 ### The Gmail MCP server's tools
 
@@ -98,6 +98,9 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 - **Less data sent to the model.** Triage sends only the sender, subject and preview, not the full email.
 - **The MCP server is safe by construction.** Its tools can only read and save drafts. Each tool is marked with MCP annotations (`read_only_hint`, `destructive_hint`), so apps know which ones change something and can ask before using them. The server also tells every app that email content is untrusted, and to treat it as information, never as instructions.
 - **Personal data stays out of Git.** The Label Designer's suggestions quote subjects from my real emails, and its label descriptions name companies I applied to, so `labels_proposed.json` is in `.gitignore`. The final label file will be handled the same way, with a shareable example file in the repo instead.
+- **Only my computer can open the web page.** Its server listens on 127.0.0.1 rather than on the network, so other devices on the same Wi-Fi can't reach it. That matters because the page will have buttons that change my Gmail.
+- **Email content can't run as code on the web page.** The templates escape every value they fill in, so a `<` in an email subject is shown as text. A test with a planted `<script>` tag confirmed it.
+- **No outside scripts on the web page.** Every file the browser loads comes from my own app, because a script from somewhere else, running at my app's address, could read my pages and press my buttons. So Tailwind's styles get built into a local CSS file instead of loaded from a CDN, and FastAPI's automatic documentation pages, which load scripts from a CDN, are switched off.
 
 ### Engineering choices
 
@@ -336,14 +339,14 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - **Group conversations**, on a real 14-message conversation with two other writers: a broad search returned 15 emails, all involving one of them. A conversation with only the *other* writer was allowed, which the first version would have refused. An unrelated conversation was still refused.
   - **The full Drafter**, on the same real conversation as before: it found my 3 earlier emails to the person and both profile files. It wrote a reply in my style, only to that person, with a placeholder for my opinion. Approved on the first try, for $0.10.
 
-### Step 7: The web page (planned, nothing built yet)
+### Step 7: The web page (in progress)
 
 **Technology**
-- **FastAPI** (Python web server), **HTML templates** (Jinja2), **HTMX** and **Tailwind CSS**.
+- **FastAPI** (a Python web framework, run by the uvicorn server), **HTML templates** (Jinja2), **HTMX** and **Tailwind CSS**.
   - FastAPI: each address, like `/sort`, is a Python function.
   - HTML templates: pages that Python fills in.
   - HTMX: buttons that update part of the page without reloading it, with no JavaScript to write.
-  - Tailwind: styling with small utility classes, loaded with one line.
+  - Tailwind: styling with small utility classes, turned into one CSS file by Tailwind's own program (see the decisions for piece 1 below).
 - **Why not Streamlit:** Streamlit would be faster to build and easier to host, but I want to learn how web apps actually work and make the page look like my own. FastAPI is also a very common way to put AI agents behind an API in AI engineering jobs, and HTML and CSS are the foundation under every web framework, Streamlit included. Streamlit is quick to learn later if a job asks for it.
 - **Why Tailwind:** it's the most common styling approach at modern startups, it gives full control over the design, and the skill carries over to any frontend work. The other options were Pico.css (clean with almost no effort, but less unique), Bootstrap and my own CSS.
 - **It runs on my own computer** (`localhost`). Only my browser can open it, because it uses my Gmail login and API key. A demo version with made-up emails could go online later. That's the same amount of work with FastAPI as with Streamlit, except that hosting takes an hour more to set up.
@@ -374,13 +377,38 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 - **Urgency is decided by code, not the model:** the model only finds the deadline. Overdue or due within 2 days counts as **urgent**, and everything else is normal. "Time-sensitive" emails without a date are marked separately.
 
 **Build order** (one small piece at a time, with my decisions along the way)
-1. A bare page that shows my current to-dos (learning how FastAPI, templates and Tailwind fit together, with nothing that changes Gmail yet)
+1. A bare page that shows my current to-dos (learning how FastAPI, templates and Tailwind fit together, with nothing that changes Gmail yet), in five smaller pieces (see below)
 2. The full-read step and urgency
 3. The "Sort new emails" button
 4. The Unsorted page
 5. The History page
 6. The draft flow: hints box, the Critic's verdict, and saving, also when the Critic isn't satisfied
 - **Later, together with the demo (if I build it):** using the project on both my PC and my laptop, with Gmail as the source of truth and a "To do" Gmail label.
+
+**Decisions for piece 1**
+- **The web app has its own folder, `web/`.** `app.py` creates the app, `templates/` holds the HTML templates, and `static/` will hold files sent to the browser as they are, like the CSS. The agent's scripts stay where they are for now. A one-line `web/__init__.py` marks the folder as a Python package, so the server can start it as `web.app` from the project folder.
+- **Only the packages it needs.** `fastapi` and `jinja2` added 4 packages in total. The server, uvicorn, was already installed because the MCP SDK uses it, and it's now pinned in `requirements.txt` as well. FastAPI's `fastapi[standard]` bundle would have added 36 packages, mostly for things this app doesn't use, like deploying to FastAPI's cloud service, error reporting and monitoring. A dry run of `pip install` showed beforehand that FastAPI leaves the Starlette version the MCP SDK relies on unchanged.
+- **Started with uvicorn directly:** `python -m uvicorn web.app:app --reload`. The command shows the two layers: uvicorn is the server, and `app` in `web/app.py` is the FastAPI app.
+- **Tailwind's standalone program instead of its CDN script.** The one-line CDN script is meant for development, builds the styles in the browser on every page load, and would mean trusting an outside server with a script running on a page full of my emails. The standalone program (no Node.js needed) reads my templates and writes one CSS file that my own app serves, so the browser loads nothing from outside. The program comes from Tailwind's GitHub releases and gets checked against its published SHA-256 checksum. It stays out of Git: it's 112 MB, and GitHub refuses files over 100 MB.
+- **The generated CSS stays out of Git.** Files a tool can rebuild are normally built where they're needed rather than stored. An online demo would build the CSS while deploying, so its styles always match the templates.
+- **Two terminals while building:** one runs the server, the other runs Tailwind, which rebuilds the CSS whenever a template changes.
+- **Reorganizing the rest of the project into folders waits until after Step 7,** as its own step, once every file exists. It needs care, because two mistakes would fail silently: `database.py` would create a new, empty database if it couldn't find `inbox_agent.db`, and `triage.py` would fall back to the example labels if it couldn't find `labels.json`.
+- **Piece 1 in five smaller pieces:** 1a the first page, 1b Tailwind, 1c the layout, 1d my to-dos from the database, 1e only the to-dos still in my inbox.
+
+**Piece 1a: the first page**
+- **Built:** `web/app.py`, a FastAPI app with one page at `/`, filled in from the template `web/templates/hello.html`. The page shows the time it was made.
+- **Learned:**
+  - How a page gets served: the browser sends a request, uvicorn (the server) receives it, FastAPI finds the function for that method and address (a "route"), and Jinja2 fills in an HTML template with the values the function passes it. It's the same pattern as my MCP server, which waits for requests on stdin and answers on stdout. A web server waits on a network port and answers with HTML.
+  - GET means "show me something" and POST means "do something". Anything that changes Gmail will be a POST, because browsers resend GET requests on their own.
+  - Escaping is the web version of SQL's `?` placeholders: values from outside are always treated as data, never as code.
+  - Jinja comments (`{# … #}`) are removed before the page is sent, unlike HTML comments, which anyone can read with View Source.
+  - A web page only exists while its server is running. When I opened the address in Chrome with the server stopped, Chrome said "This site can't be reached": nothing was listening at 127.0.0.1:8000. And 127.0.0.1 always means "this computer", so the page opens in any browser on my PC, but not from my phone.
+- **Result:**
+  - The page loads at http://127.0.0.1:8000. Refreshing it 11 seconds later changed the time from 13:27:49 to 13:28:00, so the page is built fresh for every request.
+  - `netstat` shows the server listening on `127.0.0.1:8000` only.
+  - A planted `<script>` tag came out of the template as `&lt;script&gt;`, shown as text.
+  - `pip check` found no conflicts, and Starlette stayed at 1.10.0 for the MCP server.
+- **Found and decided:** FastAPI adds pages of its own: `/docs` and `/redoc` (interactive documentation of the app's addresses) and `/openapi.json`, which those two read. The documentation pages load their scripts from a public CDN with only the major version fixed, so the file can change at any time, and a script running at my app's address could read my pages and press my buttons. These pages are useful for an API that other programs call, but this app serves pages to me, so I switched them off. All three now answer "404 Not Found".
 
 ## What's left
 
@@ -409,12 +437,17 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 - [x] Step 6b: give the Drafter and the Critic both profile files, limit lookups to the same person, Reply by default and Reply all only when asked
 - [ ] Use the Drafter on a real email that needs a reply, with `--save`, and check the draft in Gmail
 - [x] **Step 7 plan:** technology, pages, the two-stage action read, the model cascade, urgency and build order (see Step 7 above)
-- [ ] **Step 7, piece 1:** a bare page that shows my current to-dos
+- [x] **Step 7, piece 1a:** the first page: a FastAPI app with one template, only reachable from my computer
+- [ ] **Step 7, piece 1b:** Tailwind's standalone program, styling the page
+- [ ] **Step 7, piece 1c:** the layout: menu bar and "Sort new emails" button
+- [ ] **Step 7, piece 1d:** my to-dos from the database
+- [ ] **Step 7, piece 1e:** only the to-dos still in my inbox, and what happens when the Gmail login has expired
 - [ ] **Step 7, piece 2:** the full-read step (Haiku, with Sonnet for unsure cases) and urgency
 - [ ] **Step 7, piece 3:** the "Sort new emails" button, with a summary of what arrived and what needs me
 - [ ] **Step 7, piece 4:** the Unsorted page: approve, edit or reject label suggestions, or pick a label by hand
 - [ ] **Step 7, piece 5:** the History page: past runs, undo, and a "Needs action" button
 - [ ] **Step 7, piece 6:** the draft flow: "Draft reply" with a hints box, the Critic's verdict, and saving to Gmail drafts, also when the Critic isn't satisfied
+- [ ] Reorganize the project into folders, as its own step after Step 7, with one setting for where the data files live
 - [ ] Learn from my edits: compare each draft with what I actually sent, and have Claude suggest updates to the writing-style file for me to approve
 - [ ] Demo mode with made-up emails, safe to show in interviews and maybe online, together with using the project on both my PC and my laptop (a "To do" Gmail label, with Gmail as the source of truth)
 - [ ] **Step 8:** accuracy tests (evals), README polish and a demo video
@@ -440,11 +473,12 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 | `check_mcp_server.py` | Starts the MCP server the way an app would, lists its tools and tries the read-only ones |
 | `drafter.py` | The Drafter agent and the Critic: writes a reply to one conversation, reviews it, and saves it as a Gmail draft with `--save` |
 | `style_builder.py` | Builds my writing-style file: `collect` gathers my sent emails, `write` has Claude Opus describe my style |
+| `web/` | Step 7: the web page. `app.py` is the FastAPI app, and `templates/` holds the HTML templates it fills in |
 | `profile.example/` | Example versions of my profile files. The real ones are in `profile/`, which isn't in Git |
 | `requirements.txt` | Python packages, with exact versions |
 | `.env.example` | Template for the API key file |
 
-Not in Git: `.env` (API key), `credentials.json` (Google app file), `token.json` (saved Gmail login), `labels_proposed.json` (label suggestions that quote my real emails), `labels.json` (my labels, whose descriptions name companies I applied to), `inbox_agent.db` (the log of my emails and decisions), `backlog_batch.json` (which batch is waiting, deleted after use), `.venv/` (Python environment).
+Not in Git: `.env` (API key), `credentials.json` (Google app file), `token.json` (saved Gmail login), `labels_proposed.json` (label suggestions that quote my real emails), `labels.json` (my labels, whose descriptions name companies I applied to), `inbox_agent.db` (the log of my emails and decisions), `backlog_batch.json` (which batch is waiting, deleted after use), `style_source_emails.json` (my sent emails, collected for the writing-style file), `profile/` (my writing-style and about-me files), `.claude/` (settings for testing the web page in the Claude app), `.venv/` (Python environment).
 
 ## Setup
 
@@ -467,3 +501,4 @@ Not in Git: `.env` (API key), `credentials.json` (Google app file), `token.json`
 12. Run `python check_mcp_server.py` to check the Gmail MCP server. To use it in Claude Desktop, add an `mcpServers` section to Claude Desktop's `claude_desktop_config.json`, keeping everything already in the file. The server's `command` is the full path to `.venv\Scripts\python.exe`, and its `args` is the full path to `gmail_mcp_server.py`. Then quit and reopen Claude Desktop. **Settings → Developer → Edit Config** shows where the file is.
 13. Build your profile: run `python style_builder.py collect`, check `style_source_emails.json`, then run `python style_builder.py write` (about $0.15). Read and edit `profile/writing_style.md`, and fill in `profile/about_me.md` (see `profile.example/`).
 14. Run `python drafter.py --search "from:someone@example.com"` to draft a reply to the newest matching email. Add `--note "what to say"` to tell it what you want, and `--save` to save the approved reply as a Gmail draft. Without `--save`, nothing changes in Gmail. A draft costs roughly $0.05 to $0.20. The Microsoft Store version of Claude keeps it in `%LOCALAPPDATA%\Claude-Data\<app folder>\`, not `%APPDATA%\Claude\` as many guides say. The file is a database, not text, so VS Code can't open it on its own.
+15. Start the web page from the project folder with `python -m uvicorn web.app:app --reload`, then open http://127.0.0.1:8000 in a browser. Only this computer can open it. Stop it with Ctrl+C.
