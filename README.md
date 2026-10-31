@@ -2,7 +2,7 @@
 
 An AI agent that organizes my Gmail. It sorts every email into labels, flags the emails that need a reply or an action from me, drafts replies, and shows everything on a web page with a daily summary. Several Claude models work together, each with its own job, and nothing is ever sent without my approval.
 
-**Status:** Steps 1 to 4 done. The agent sorts each email into one of 15 labels designed by Claude Opus and reviewed by me, flags what needs a reply or an action, and suggests new labels for emails that fit none. It adds the labels in Gmail and archives sorted emails, so the inbox only holds what still needs me. It records every decision in a database, so it never sorts the same email twice and any run can be undone. **It sorted my whole backlog with the Message Batches API: 6,547 emails for $1.54, taking the inbox from 6,494 emails to 60.** Step 5 is built: my own Gmail MCP server, whose tools can search and read emails, list my to-dos and save reply drafts, but never send, delete or archive. It works in Claude Desktop. Step 6 is built: a Drafter agent (Claude Sonnet) that writes replies in my style, using a writing-style file learned from my sent emails and the MCP server's tools, and a Critic (Claude Opus) that checks every draft before it can be saved. **Now: Step 7, the web page:** a FastAPI app with HTML templates, HTMX and Tailwind, with Action needed, Unsorted and History pages, and a two-stage read so that actions come with exact steps, links and deadlines. The first pieces are built: the web app runs on my computer, where only I can open it, and serves a first page styled with Tailwind.
+**Status:** Steps 1 to 4 done. The agent sorts each email into one of 15 labels designed by Claude Opus and reviewed by me, flags what needs a reply or an action, and suggests new labels for emails that fit none. It adds the labels in Gmail and archives sorted emails, so the inbox only holds what still needs me. It records every decision in a database, so it never sorts the same email twice and any run can be undone. **It sorted my whole backlog with the Message Batches API: 6,547 emails for $1.54, taking the inbox from 6,494 emails to 60.** Step 5 is built: my own Gmail MCP server, whose tools can search and read emails, list my to-dos and save reply drafts, but never send, delete or archive. It works in Claude Desktop. Step 6 is built: a Drafter agent (Claude Sonnet) that writes replies in my style, using a writing-style file learned from my sent emails and the MCP server's tools, and a Critic (Claude Opus) that checks every draft before it can be saved. **Now: Step 7, the web page:** a FastAPI app with HTML templates, HTMX and Tailwind, with Action needed, Unsorted and History pages, and a two-stage read so that actions come with exact steps, links and deadlines. The first pieces are built: the web app runs on my computer, where only I can open it, with a shared layout: a menu for its three pages and the "Sort new emails" button, styled with Tailwind and the Inter font.
 
 ## How it works
 
@@ -100,7 +100,7 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 - **Personal data stays out of Git.** The Label Designer's suggestions quote subjects from my real emails, and its label descriptions name companies I applied to, so `labels_proposed.json` is in `.gitignore`. The final label file will be handled the same way, with a shareable example file in the repo instead.
 - **Only my computer can open the web page.** Its server listens on 127.0.0.1 rather than on the network, so other devices on the same Wi-Fi can't reach it. That matters because the page will have buttons that change my Gmail.
 - **Email content can't run as code on the web page.** The templates escape every value they fill in, so a `<` in an email subject is shown as text. A test with a planted `<script>` tag confirmed it.
-- **No outside scripts on the web page.** Every file the browser loads comes from my own app, because a script from somewhere else, running at my app's address, could read my pages and press my buttons. So Tailwind's styles get built into a local CSS file instead of loaded from a CDN, and FastAPI's automatic documentation pages, which load scripts from a CDN, are switched off.
+- **No outside scripts on the web page.** Every file the browser loads comes from my own app, because a script from somewhere else, running at my app's address, could read my pages and press my buttons. So Tailwind's styles get built into a local CSS file instead of loaded from a CDN, and FastAPI's automatic documentation pages, which load scripts from a CDN, are switched off. The font is served by the app too: loading it from Google Fonts would tell Google about every page I open.
 - **The web app can't hand out other files.** It only serves files from `web/static/`. Requests that try to climb out of that folder, like `/static/../../token.json`, get "404 Not Found".
 
 ### Engineering choices
@@ -434,6 +434,33 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - The watcher (`--watch`) uses about 94 MB of memory and almost no processor time: 0.14 seconds in total, including its first build and two rebuilds. A rebuild after saving a template takes under half a millisecond.
 - **Found:** the app doesn't tell browsers how long to keep the CSS (there's no `Cache-Control` header), so a browser may reuse its saved copy for a short while after a rebuild. Ctrl+F5 reloads the page without it. The usual fix is a version number in the CSS link, for later.
 
+**Piece 1c: the layout**
+- **Decided:**
+  - Parts that aren't built yet are shown, clearly marked. Unsorted and History say which piece they arrive in, and the "Sort new emails" button is greyed out, with "Coming in piece 3" on hover. That way the layout is complete and testable now, and piece 3 needs a disabled button anyway, while sorting runs.
+  - Blue as the accent color, for the current menu item and the Sort button, on my light blue page with a white top bar and cards.
+  - The Inter font, chosen now from five options rather than left for later. The app serves it itself instead of loading it from Google Fonts.
+  - Made for my PC, but not broken on a phone: on a narrow screen the top bar wraps onto three lines.
+  - Action needed is the home page (`/`), next to `/unsorted` and `/history`. The top bar stays in view when scrolling, and each page has its own tab title.
+- **Built:**
+  - `web/templates/base.html`, the shared layout: the page's `<head>`, the top bar with the menu and the Sort button, and a slot for each page's content. `action.html`, `unsorted.html` and `history.html` fill that slot, and replace `hello.html`.
+  - One route per page in `web/app.py`. Each tells the layout which menu item to highlight.
+  - Inter 4.1 in `web/static/fonts/`, with its license file (the SIL Open Font License, which allows shipping it with the app), set as the font in `web/tailwind.css`. Inter publishes no checksums, so I compared two official copies instead: the font in the release on GitHub and the one on Inter's website have the same SHA-256 fingerprint.
+- **Learned:**
+  - Template inheritance: one layout with empty "blocks" that each page fills in, so the menu is written once.
+  - Links are for going (a GET request for another page), buttons are for doing (they'll send a POST).
+  - Tailwind variants: a prefix applies a class only in some situations, like `hover:` or `disabled:`. In the CSS, `.disabled\:opacity-50:disabled` means "this class, while the element is disabled".
+  - A variable font holds every weight in one file, and `@font-face` tells the browser where to find it.
+  - Servers label every file they send with its type, like `text/css`, looked up from the file's extension.
+- **Result:**
+  - All three pages load. Each menu link opens its page, the current page is highlighted in blue, and each tab has its own title. Clicking "Inbox Agent" goes back home.
+  - Inter loads from my own app: besides the page itself, the browser fetched only two files, `app.css` and the font, and the font it got matches the checked copy byte for byte.
+  - The Sort button is disabled and says "Coming in piece 3" on hover.
+  - On a phone-sized window (375 px wide), nothing sticks out sideways.
+  - All 45 different classes in the templates have a rule in the 10.7 KB CSS file.
+- **Found:**
+  - **The font was sent as an unknown file.** The server looks up each file's type from its extension in Python's list of types, and on this computer that list doesn't include `.woff2`, so the font went out as "application/octet-stream". Browsers coped, but one line in `web/app.py` now adds the type, and the font goes out as `font/woff2`.
+  - **`--reload` got stuck in the background server I test with.** It noticed the change ("Reloading...") but the old server kept running with the old code. On Windows, uvicorn stops the old server with the same signal as pressing Ctrl+C in a console window, and a server started in the background has no console window, which is most likely why it never arrived. In a real terminal, the same command shut the old server down and started a new one within seconds. So `--reload` works the way I run the app, and a background test server needs a manual restart after Python changes.
+
 ## What's left
 
 - [x] **Step 1:** First call to Claude
@@ -463,7 +490,7 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 - [x] **Step 7 plan:** technology, pages, the two-stage action read, the model cascade, urgency and build order (see Step 7 above)
 - [x] **Step 7, piece 1a:** the first page: a FastAPI app with one template, only reachable from my computer
 - [x] **Step 7, piece 1b:** Tailwind's standalone program, styling the page
-- [ ] **Step 7, piece 1c:** the layout: menu bar and "Sort new emails" button
+- [x] **Step 7, piece 1c:** the layout: menu bar and "Sort new emails" button
 - [ ] **Step 7, piece 1d:** my to-dos from the database
 - [ ] **Step 7, piece 1e:** only the to-dos still in my inbox, and what happens when the Gmail login has expired
 - [ ] **Step 7, piece 2:** the full-read step (Haiku, with Sonnet for unsure cases) and urgency
@@ -497,7 +524,7 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 | `check_mcp_server.py` | Starts the MCP server the way an app would, lists its tools and tries the read-only ones |
 | `drafter.py` | The Drafter agent and the Critic: writes a reply to one conversation, reviews it, and saves it as a Gmail draft with `--save` |
 | `style_builder.py` | Builds my writing-style file: `collect` gathers my sent emails, `write` has Claude Opus describe my style |
-| `web/` | Step 7: the web page. `app.py` is the FastAPI app, `templates/` holds the HTML templates it fills in, `tailwind.css` tells Tailwind's program what to build, and `static/` holds files sent to the browser as they are, like the built CSS |
+| `web/` | Step 7: the web page. `app.py` is the FastAPI app, with one function per page. `templates/` holds the HTML templates: `base.html` is the shared layout with the menu, and each page fills it in. `tailwind.css` tells Tailwind's program what to build, and `static/` holds files sent to the browser as they are: the built CSS and the Inter font |
 | `profile.example/` | Example versions of my profile files. The real ones are in `profile/`, which isn't in Git |
 | `requirements.txt` | Python packages, with exact versions |
 | `.env.example` | Template for the API key file |

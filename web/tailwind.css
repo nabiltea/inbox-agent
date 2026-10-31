@@ -3,5 +3,21 @@
    web/ folder, and writes the finished CSS to web/static/app.css.
 
    source(".") limits Tailwind to this folder (web/), so it never reads the rest
-   of the project. My own colors and fonts will go here later. */
+   of the project. */
 @import "tailwindcss" source(".");
+
+/* The Inter font, served by this app from web/static/fonts/ rather than from an
+   outside server. It's a "variable" font: one file holds every weight, from thin
+   to black. swap shows the text straight away and switches to Inter once it's loaded. */
+@font-face {
+  font-family: "Inter";
+  src: url("fonts/InterVariable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* Use Inter for all text, falling back to the computer's own font if it can't load. */
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+}

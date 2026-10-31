@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  {# Each page puts its own name in front, like "Action needed · Inbox Agent" #}
+  <title>{% block title %}{% endblock %} · Inbox Agent</title>
+  {# The CSS that Tailwind's program builds from the classes used in the templates #}
+  <link rel="stylesheet" href="{{ url_for('static', path='app.css').path }}">
+</head>
+<body class="min-h-screen bg-blue-100 text-gray-900">
+  {# The top bar, the same on every page. sticky top-0 keeps it in view when the page scrolls. #}
+  <header class="sticky top-0 z-10 border-b border-gray-200 bg-white">
+    <div class="mx-auto flex max-w-5xl flex-wrap items-center gap-x-8 gap-y-2 px-6 py-3">
+      <a href="{{ url_for('action_needed').path }}" class="text-lg font-semibold">Inbox Agent</a>
+
+      {# The menu: one link per page. "active" comes from the page's function in app.py,
+         and the current page is drawn in blue. #}
+      <nav class="flex gap-6 text-sm">
+        {% for page, label in [("action_needed", "Action needed"), ("unsorted", "Unsorted"), ("history", "History")] %}
+          <a href="{{ url_for(page).path }}"
+             {% if page == active %}aria-current="page"{% endif %}
+             class="border-b-2 py-1 {% if page == active %}border-blue-600 font-medium text-blue-600{% else %}border-transparent text-gray-600 hover:text-gray-900{% endif %}">
+            {{ label }}
+          </a>
+        {% endfor %}
+      </nav>
+
+      {# Sorting arrives in piece 3. Until then the button is greyed out and can't be clicked.
+         The hover text sits on the wrapper, because some browsers show none on a disabled button. #}
+      <span class="ml-auto" title="Coming in piece 3">
+        <button type="button" disabled
+                class="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50">
+          Sort new emails
+        </button>
+      </span>
+    </div>
+  </header>
+
+  {# Each page's own content goes into this slot #}
+  <main class="mx-auto max-w-5xl px-6 py-8">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

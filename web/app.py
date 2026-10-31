@@ -2,8 +2,9 @@
 
 A FastAPI app that runs on my own computer. Each address, like "/", is a Python
 function, and each page is an HTML template in web/templates/ that the function
-fills in. For now there's a single page, which shows that the server, FastAPI,
-the templates and Tailwind work together.
+fills in. There are three pages, Action needed, Unsorted and History, which share
+one layout with the menu (web/templates/base.html). For now they only say what's
+coming.
 
 Start it from the project folder with:
   python -m uvicorn web.app:app --reload
@@ -21,7 +22,7 @@ While editing templates, add --watch and leave it running in a second terminal: 
 rebuilds the CSS every time a file is saved. (A public site would add --minify.)
 """
 
-from datetime import datetime
+import mimetypes
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -48,14 +49,33 @@ templates = Jinja2Templates(directory=WEB_DIR / "templates")
 # of the project. The name "static" is what url_for('static', ...) in the templates uses.
 app.mount("/static", StaticFiles(directory=WEB_DIR / "static"), name="static")
 
+# The server labels each file with its type, looked up from the file's extension in
+# Python's list of types. That list doesn't include .woff2 (the font) on this computer,
+# so the font was sent as an unknown file, "application/octet-stream". This adds it.
+mimetypes.add_type("font/woff2", ".woff2")
 
-# @app.get("/") connects this function to the address "/", the home page. GET means
-# the browser only asks to see something. Anything that changes Gmail will use POST.
+
+# @app.get("/") connects the function below it to the address "/", the home page. GET
+# means the browser only asks to see something. Anything that changes Gmail will use POST.
+# Each page passes "active", the name of its own function, so the menu can show which
+# page is open. url_for() in the templates builds the menu's links from the same names.
 @app.get("/")
-def home(request: Request):
-    """The home page. For now it shows the time it was made, which changes on every refresh."""
+def action_needed(request: Request):
+    """Action needed: everything that needs a reply or an action from me. The to-dos arrive in piece 1d."""
     return templates.TemplateResponse(
-        request=request,  # the browser's request, which templates need to build links later
-        name="hello.html",
-        context={"made_at": f"{datetime.now():%H:%M:%S}"},  # the values the template can use
+        request=request,  # the browser's request, which templates need to build links
+        name="action.html",
+        context={"active": "action_needed"},  # the values the template can use
     )
+
+
+@app.get("/unsorted")
+def unsorted(request: Request):
+    """Unsorted: emails that fit no label, with their suggested labels. A placeholder until piece 4."""
+    return templates.TemplateResponse(request=request, name="unsorted.html", context={"active": "unsorted"})
+
+
+@app.get("/history")
+def history(request: Request):
+    """History: past runs, what was sorted where, and undo. A placeholder until piece 5."""
+    return templates.TemplateResponse(request=request, name="history.html", context={"active": "history"})
