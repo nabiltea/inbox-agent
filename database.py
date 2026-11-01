@@ -97,6 +97,15 @@ def flagged_emails(conn):
     """).fetchall()
 
 
+def newest_emails(conn, count, except_labels=()):
+    """The newest emails the agent has sorted, leaving out the given labels."""
+    # One ? per label to leave out: the labels themselves still go in as values, never as SQL.
+    skip = f"WHERE label NOT IN ({', '.join('?' * len(except_labels))})" if except_labels else ""
+    return conn.execute(
+        f"SELECT * FROM decisions {skip} ORDER BY received_at DESC LIMIT ?", (*except_labels, count)
+    ).fetchall()
+
+
 def list_runs(conn):
     """Every run, newest first, with how many emails it sorted."""
     return conn.execute("""

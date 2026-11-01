@@ -640,6 +640,38 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - Three cards across on the PC, one on a phone, and nothing sticks out sideways.
 - **Found:** 26 emails in my inbox haven't been sorted yet, and the last run was on 26 October. Sorting needs to be easier to start, which is what piece 3's button is for.
 
+**Piece 2: reading the whole email (in progress)**
+- **Decided:**
+  - **Prices checked first:** Claude Haiku 5.5 costs $0.10 / $0.50 per million input / output tokens, and Claude Sonnet 5.5 $2 / $10. Triage already uses Haiku 5.5.
+  - **When the full read says a flagged email needs nothing, it's archived,** like any sorted email that doesn't need me. I'm not sorting for real until the History page (piece 5) can undo and rescue, so nothing gets archived before that safety net exists.
+  - **"Where" is only the site's name and web address,** like "Dropbox Sign (dropbox.com)", never a clickable link taken from the email. Links in emails can be phishing, and "Open in Gmail" leads to the real link, with Gmail's own warnings.
+  - **Overdue to-dos get a gray "Overdue" tag** and sit after the urgent ones, so the top of the list is for things I can still do.
+  - **No full read for today's to-dos:** they're all overdue, and I'll clear them with an archive button on the page (in What's left).
+  - **Invitations from a real person count as to-dos:** a request to connect, like a LinkedIn connection request, or a document someone shared with me. The rule went into both triage's first look and the full read, which also spell out the look-alikes that need nothing: suggestions of people I might know, and notices that someone accepted my invitation.
+  - **Four parts:** 1 the full read itself, with a dry run; 2 saving the results in the log; 3 urgency, shown on the page and to Claude Desktop; 4 triage running the full read for new emails.
+
+**Piece 2, part 1: the full read**
+- **Built:**
+  - `full_read.py`: the form Claude fills in (needs me: yes, no or unsure; what kind; the steps; where; the deadline; time-sensitive; why), its instructions, and the two readers. Claude Haiku reads every email, and Claude Sonnet reads it again only when Haiku is unsure, and has to decide. If neither gives a usable answer, the email counts as needing me.
+  - A dry run, `python full_read.py`, that prints the first look next to the full read, with the cost, and saves nothing. `--tokens-only` counts the input tokens first, which is free.
+  - `get_message(..., link_hosts=True)` in `gmail_client.py`: the email's text with every link reduced to its site, like `[link: app.example.com]`.
+- **Learned:**
+  - A model cascade: a cheap model handles the clear cases and a stronger one only the hard ones, so the stronger model's price is paid only where it helps.
+  - Counting tokens is free, so the exact input size of a paid run can be checked beforehand.
+  - Turning HTML into text drops the link addresses along with the tags, so an email written only in HTML loses all its links unless they're kept on purpose.
+  - Prompt injection: an email is someone else's text, so the reader treats it as content, never as instructions, and all it can do is fill in a form.
+- **Result:**
+  - Free checks: keeping links as their site makes the text 55% shorter (43,271 characters down to 19,630 for 20 emails), the reader sees 92 links instead of 68, and three emails written only in HTML went from 0 links to 12, 5 and 7. The 30 dry-run emails came to 56,362 input tokens.
+  - The dry run made 31 reads (the 20 newest emails outside the routine labels, my 10 newest to-dos, and one email with a date to test the deadline) for $0.032, about $0.001 each. Haiku decided 27, and Sonnet reviewed 4, at $0.004 to $0.008 each. At about 5 full reads a day, that's roughly $0.15 a month, well under the $0.50 to $1 estimated.
+  - It agreed with the first look 28 times, found nothing the first look had missed, and cleared 3 flagged reads: a LinkedIn connection request (decided by Sonnet) and a shared Google Doc (in both runs). My rules counted both as optional (see Found).
+  - The steps and places were concrete, with the options to pick from, the site to use and the deadline, also when an email wasn't in English.
+  - The three emails read in both runs got the same answer both times.
+- **Found:**
+  - The web address for the same place varies: one signing service came back with three different addresses. The name stays the same, so the page will lead with the name.
+  - "Time-sensitive" was also set when there was a date (a payment request). Urgency will use the date when there is one, and "time-sensitive" only without one.
+  - The "why" sometimes says "you", and sometimes "me" or my name. Asking for "you" throughout, which reads best on the page, is a small change to the instructions.
+  - **Found and fixed: my rules left invitations out.** The dry run cleared a LinkedIn connection request and a shared Google Doc, because the instructions said that things I could do if I wanted need nothing, and never mentioned invitations. It wasn't that I'd accepted the request: the reader only sees the email, not LinkedIn. After the new rule, both invitations count in the first look and the full read ("answer an invitation", now a kind of its own), and three look-alikes still need nothing: a "people you may know" suggestion, an "accepted your invitation" notice and a birthday reminder. That check cost $0.004.
+
 ## What's left
 
 - [x] **Step 1:** First call to Claude
@@ -678,12 +710,16 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - [x] part 4: an "Open in Gmail" link that names my account
   - [x] part 5: Claude Desktop's `list_todos` uses the same list and connects fresh for every tool call
 - [x] **Step 7, piece 1f:** a home page: what needs me, Unsorted emails, replies waiting to be sent, and what the agent did lately
-- [ ] **Step 7, piece 2:** the full-read step (Haiku, with Sonnet for unsure cases) and urgency
+- [ ] **Step 7, piece 2:** the full-read step (Haiku, with Sonnet for unsure cases) and urgency, in four parts:
+  - [x] part 1: the full read itself, with a dry run on real emails
+  - [ ] part 2: saving the results in the log
+  - [ ] part 3: urgency, shown on the page and to Claude Desktop
+  - [ ] part 4: triage runs the full read for new emails, before deciding what to archive
 - [ ] **Step 7, piece 3:** the "Sort new emails" button, with a summary of what arrived and what needs me
 - [ ] **Step 7, piece 4:** the Unsorted page: approve, edit or reject label suggestions, or pick a label by hand
 - [ ] **Step 7, piece 5:** the History page: past runs, undo, and a "Needs action" button
 - [ ] **Step 7, piece 6:** the draft flow: "Draft reply" with a hints box, the Critic's verdict, and saving to Gmail drafts, also when the Critic isn't satisfied
-- [ ] Decide how to mark a to-do as done from the page: a "Done" button would archive the email in Gmail
+- [ ] An archive button for to-dos on the page, so I can clear the overdue ones there instead of in Gmail. It changes Gmail, so it needs the protection against other websites pressing buttons that piece 3 adds
 - [ ] A double-click shortcut that starts the web page, so opening it doesn't need VS Code
 - [ ] Decide whether to move the Google app from "Testing" to "In production", which would end the weekly sign-in (first check Google's rules for unverified apps that use Gmail)
 - [ ] Reorganize the project into folders, as its own step after Step 7, with one setting for where the data files live
@@ -703,6 +739,7 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 | `gmail_client.py` | All Gmail code: login (also from the web page), fetch emails |
 | `show_inbox.py` | Step 2: prints the 20 newest inbox emails |
 | `triage.py` | Step 3: sorts emails with Claude Haiku, flags replies and actions, suggests labels (dry run) |
+| `full_read.py` | Step 7: reads a whole email and says what exactly to do, where and by when. Claude Haiku first, Claude Sonnet when Haiku is unsure |
 | `label_designer.py` | Step 4: Claude Opus suggests a label set from my inbox and existing labels |
 | `labels.example.json` | A shareable example label set. My real labels are in `labels.json`, which isn't in Git |
 | `database.py` | The agent's memory: a SQLite log of every email it handled and what it decided |

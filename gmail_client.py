@@ -21,7 +21,7 @@ from datetime import datetime
 from email.message import EmailMessage
 from email.utils import formataddr, getaddresses, parseaddr
 from pathlib import Path
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 from google.auth.exceptions import RefreshError, TransportError
 from google.auth.transport.requests import Request
@@ -388,8 +388,13 @@ def get_thread(service, thread_id, max_chars_per_message=4000):
     return {"thread_id": thread_id, "subject": subject, "messages": messages}
 
 
-def get_message(service, message_id):
-    """One email with its sender, recipients, subject, date and full text."""
+def get_message(service, message_id, link_hosts=False):
+    """One email with its sender, recipients, subject, date and full text.
+
+    With link_hosts, every web address in the text becomes just its site, like
+    "[link: links.dropbox.com]": enough to tell where a link goes, without long
+    tracking addresses, and links survive even in emails written only in HTML.
+    """
     message = _execute(service.users().messages().get(userId="me", id=message_id, format="full"))
     headers = _headers(message)
     return {
@@ -399,7 +404,7 @@ def get_message(service, message_id):
         "to": headers.get("to", ""),
         "subject": headers.get("subject") or "(no subject)",
         "date": datetime.fromtimestamp(int(message["internalDate"]) / 1000).isoformat(timespec="minutes"),
-        "body": _extract_body(message["payload"]),
+        "body": _extract_body(message["payload"], link_hosts),
     }
 
 
@@ -580,11 +585,29 @@ def _headers(message):
     return {h["name"].lower(): h["value"] for h in message["payload"].get("headers", [])}
 
 
-def _extract_body(payload):
+# A web address in text, from http(s):// up to the next space, quote or bracket
+WEB_ADDRESS = re.compile(r"https?://[^\s<>\"')\]]+")
+
+# A link in HTML: <a ... href="address" ...>text</a>
+LINK_TAG = re.compile(r"""<a\s[^>]*?href=["']([^"']+)["'][^>]*>(.*?)</a>""", re.S | re.I)
+
+
+def _site(address):
+    """Just the site of a web address, like "links.dropbox.com" for a long tracking link."""
+    return urlsplit(address).hostname or "?"
+
+
+def _sites_only(text):
+    """Replace every web address in the text with just its site, like "[link: links.dropbox.com]"."""
+    return WEB_ADDRESS.sub(lambda match: f"[link: {_site(match.group(0))}]", text)
+
+
+def _extract_body(payload, link_hosts=False):
     """Find the readable text of an email: plain text if there is any, otherwise HTML with the tags removed.
 
     An email is a tree of parts (plain text, HTML, attachments, parts inside parts),
-    so this walks the whole tree.
+    so this walks the whole tree. With link_hosts, web addresses become just their
+    site (see get_message), including the links that removing HTML tags would drop.
     """
     plain, html_parts = [], []
 
@@ -599,13 +622,19 @@ def _extract_body(payload):
 
     walk(payload)
     if plain:
-        return "\n".join(plain).strip()
+        text = "\n".join(plain).strip()
+        return _sites_only(text) if link_hosts else text
     text = "\n".join(html_parts)
     text = re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", text, flags=re.S | re.I)  # drop code and styling
+    if link_hosts:  # note each link's site next to its text, before the tags (and the addresses) go
+        text = LINK_TAG.sub(
+            lambda m: f"{m.group(2)} [link: {_site(m.group(1))}]" if m.group(1).startswith("http") else m.group(2), text
+        )
     text = re.sub(r"<br\s*/?>|</p>|</div>|</tr>", "\n", text, flags=re.I)  # keep line breaks
     text = html.unescape(re.sub(r"<[^>]+>", " ", text))  # drop the remaining tags
     text = re.sub(r"[ \t]+", " ", text)
-    return re.sub(r"\s*\n\s*", "\n", text).strip()
+    text = re.sub(r"\s*\n\s*", "\n", text).strip()
+    return _sites_only(text) if link_hosts else text
 
 
 def _decode(data):
