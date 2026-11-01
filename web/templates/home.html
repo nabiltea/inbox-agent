@@ -1,0 +1,76 @@
+{# The home page: an overview, with a card for each number. It fills the slots in base.html.
+   Its title block stays empty, so the browser tab just says "Inbox Agent". #}
+{% extends "base.html" %}
+
+{# Added to the Gmail notice in base.html when Gmail couldn't be checked #}
+{% block gmail_problem_note %}
+  <p class="mt-1 text-sm">Until then, these numbers may include emails you've already archived.</p>
+{% endblock %}
+
+{% block content %}
+  <h1 class="text-2xl font-semibold">Overview</h1>
+
+  {# One card per number: one column on a phone, two from "sm" (640 px), three from "lg"
+     (1024 px). Each card is a column (flex-col), and mt-auto pushes its link to the bottom,
+     so the links in a row line up. The arrows are skipped by screen readers. #}
+  <div class="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+
+    <div class="flex flex-col rounded-lg bg-white p-5 shadow-sm">
+      <p class="text-3xl font-semibold">{{ need_you }}</p>
+      <p class="mt-1 font-medium">{{ "conversation needs" if need_you == 1 else "conversations need" }} you</p>
+      <p class="mt-1 text-sm text-gray-500">{{ actions }} need an action, {{ replies }} need a reply</p>
+      <a href="{{ url_for('action_needed').path }}" class="mt-auto pt-3 text-sm text-blue-600 hover:underline">
+        Action needed<span aria-hidden="true"> →</span>
+      </a>
+    </div>
+
+    <div class="flex flex-col rounded-lg bg-white p-5 shadow-sm">
+      <p class="text-3xl font-semibold">{{ "?" if new is none else new }}</p>
+      <p class="mt-1 font-medium">new {{ "email" if new == 1 else "emails" }}, not sorted yet</p>
+      <p class="mt-1 text-sm text-gray-500">
+        {% if new is none %}Gmail couldn't be asked.{% else %}In your inbox, but the agent hasn't seen them.{% endif %}
+        Sorting from this page comes in piece 3.
+      </p>
+    </div>
+
+    <div class="flex flex-col rounded-lg bg-white p-5 shadow-sm">
+      <p class="text-3xl font-semibold">{{ unsorted }}</p>
+      <p class="mt-1 font-medium">Unsorted</p>
+      <p class="mt-1 text-sm text-gray-500">Emails that fit no label, each with a suggested new one</p>
+      <a href="{{ url_for('unsorted').path }}" class="mt-auto pt-3 text-sm text-blue-600 hover:underline">
+        Unsorted<span aria-hidden="true"> →</span>
+      </a>
+    </div>
+
+    <div class="flex flex-col rounded-lg bg-white p-5 shadow-sm">
+      <p class="text-3xl font-semibold text-gray-400">–</p>
+      <p class="mt-1 font-medium">replies waiting to be sent</p>
+      <p class="mt-1 text-sm text-gray-500">Coming in piece 6, with the draft flow</p>
+    </div>
+
+    <div class="flex flex-col rounded-lg bg-white p-5 shadow-sm">
+      {% if last_run %}
+        <p class="text-3xl font-semibold">{{ "{:,}".format(last_run.emails) }}</p>
+        <p class="mt-1 font-medium">sorted in the last run</p>
+        <p class="mt-1 text-sm text-gray-500">
+          {{ last_run_date|show_date }}: {{ last_run.archived }} archived, {{ last_run.flagged }} need you
+        </p>
+      {% else %}
+        <p class="text-3xl font-semibold text-gray-400">–</p>
+        <p class="mt-1 font-medium">no sorting runs yet</p>
+      {% endif %}
+      <a href="{{ url_for('history').path }}" class="mt-auto pt-3 text-sm text-blue-600 hover:underline">
+        History<span aria-hidden="true"> →</span>
+      </a>
+    </div>
+
+    <div class="flex flex-col rounded-lg bg-white p-5 shadow-sm">
+      <p class="text-3xl font-semibold">{{ "$%.2f"|format(costs.cost_since) }}</p>
+      <p class="mt-1 font-medium">sorting cost this month</p>
+      <p class="mt-1 text-sm text-gray-500">
+        {{ "$%.2f"|format(costs.cost) }} in total, for {{ "{:,}".format(costs.emails) }} emails
+      </p>
+    </div>
+
+  </div>
+{% endblock %}

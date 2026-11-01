@@ -116,6 +116,36 @@ def last_run(conn):
     return get_run(conn, runs[0]["run_id"]) if runs else []
 
 
+# For the web page's overview. SQL does the adding up: COUNT and SUM total the rows
+# inside the database, so only the totals come back to Python, not thousands of rows.
+
+def last_run_summary(conn):
+    """The most recent run in numbers: when it started, and how many emails it sorted,
+    archived and flagged as needing me. None if there are no runs yet."""
+    return conn.execute("""
+        SELECT MIN(processed_at) AS started, COUNT(*) AS emails, SUM(archived) AS archived,
+               SUM(needs_reply = 1 OR needs_action = 1) AS flagged
+        FROM decisions GROUP BY run_id ORDER BY started DESC LIMIT 1
+    """).fetchone()
+
+
+def unsorted_count(conn):
+    """How many emails fit no label. Triage labels those "Unsorted" (UNSORTED in triage.py)."""
+    return conn.execute("SELECT COUNT(*) FROM decisions WHERE label = 'Unsorted'").fetchone()[0]
+
+
+def sorting_costs(conn, since):
+    """What sorting has cost in dollars, and for how many emails: since the given date, and in total.
+
+    COALESCE turns "no rows, so no sum" into 0.
+    """
+    recent = conn.execute(
+        "SELECT COUNT(*), COALESCE(SUM(cost), 0) FROM decisions WHERE processed_at >= ?", (since.isoformat(),)
+    ).fetchone()
+    total = conn.execute("SELECT COUNT(*), COALESCE(SUM(cost), 0) FROM decisions").fetchone()
+    return {"emails_since": recent[0], "cost_since": recent[1], "emails": total[0], "cost": total[1]}
+
+
 def delete_run(conn, run_id):
     """Forget every decision from one run, so those emails get sorted again next time."""
     conn.execute("DELETE FROM decisions WHERE run_id = ?", (run_id,))

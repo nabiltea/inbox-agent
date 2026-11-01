@@ -95,7 +95,7 @@ templates.env.globals["file_version"] = file_version
 _waiting = {}
 
 # Where signing in ends, whether it worked or not: the address behind "Inbox Agent" in
-# the top bar. That's Action needed for now, and the home page once piece 1f is built.
+# the top bar, the home page.
 HOME = "/"
 
 
@@ -144,6 +144,38 @@ def check_inbox():
 # Each page passes "active", the name of its own function, so the menu can show which
 # page is open. url_for() in the templates builds the menu's links from the same names.
 @app.get("/")
+def home(request: Request):
+    """The home page: an overview of what needs me and what the agent did lately."""
+    inbox_ids, gmail_problem = check_inbox()
+    month_start = datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    with closing(database.connect()) as conn:
+        todos = list_todos(database.flagged_emails(conn), inbox_ids)
+        # Emails in my inbox that aren't in the log: the agent hasn't sorted them yet.
+        # Unknown (None) when Gmail couldn't be asked.
+        new = None if inbox_ids is None else sum(not database.is_processed(conn, i) for i in inbox_ids)
+        last_run = database.last_run_summary(conn)
+        costs = database.sorting_costs(conn, since=month_start)
+        unsorted = database.unsorted_count(conn)
+    return templates.TemplateResponse(
+        request=request,
+        name="home.html",
+        context={
+            "active": "home",  # no menu item has this name, so none is highlighted
+            "need_you": len(todos),
+            "actions": sum(todo.needs_action for todo in todos),
+            "replies": sum(todo.needs_reply for todo in todos),
+            "new": new,
+            "unsorted": unsorted,
+            "last_run": last_run,
+            "last_run_date": datetime.fromisoformat(last_run["started"]) if last_run else None,
+            "costs": costs,
+            "gmail_problem": gmail_problem,  # None, or why Gmail couldn't be checked
+            "message": _waiting.pop("message", None),  # shown once, after signing in
+        },
+    )
+
+
+@app.get("/action-needed")
 def action_needed(request: Request):
     """Action needed: everything that needs a reply or an action from me, one row per conversation."""
     # The two lists the to-do recipe (todos.py) works from: what's in my inbox, from

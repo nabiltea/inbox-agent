@@ -3,8 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  {# Each page puts its own name in front, like "Action needed · Inbox Agent" #}
-  <title>{% block title %}{% endblock %} · Inbox Agent</title>
+  {# Each page puts its own name in front, like "Action needed · Inbox Agent". The home
+     page puts nothing there, so its tab just says "Inbox Agent". #}
+  <title>{% block title %}{% endblock %}Inbox Agent</title>
   {# The CSS that Tailwind's program builds from the classes used in the templates. The ?v=
      fingerprint changes whenever the file does, so browsers fetch the new one (see app.py). #}
   <link rel="stylesheet" href="{{ url_for('static', path='app.css').path }}?v={{ file_version('app.css') }}">
@@ -13,7 +14,7 @@
   {# The top bar, the same on every page. sticky top-0 keeps it in view when the page scrolls. #}
   <header class="sticky top-0 z-10 border-b border-gray-200 bg-white">
     <div class="mx-auto flex max-w-5xl flex-wrap items-center gap-x-8 gap-y-2 px-6 py-3">
-      <a href="{{ url_for('action_needed').path }}" class="text-lg font-semibold">Inbox Agent</a>
+      <a href="{{ url_for('home').path }}" class="text-lg font-semibold">Inbox Agent</a>
 
       {# The menu: one link per page. "active" comes from the page's function in app.py,
          and the current page is drawn in blue. #}

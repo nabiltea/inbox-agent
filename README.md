@@ -2,7 +2,7 @@
 
 An AI agent that organizes my Gmail. It sorts every email into labels, flags the emails that need a reply or an action from me, drafts replies, and shows everything on a web page with a daily summary. Several Claude models work together, each with its own job, and nothing is ever sent without my approval.
 
-**Status:** Steps 1 to 4 done. The agent sorts each email into one of 15 labels designed by Claude Opus and reviewed by me, flags what needs a reply or an action, and suggests new labels for emails that fit none. It adds the labels in Gmail and archives sorted emails, so the inbox only holds what still needs me. It records every decision in a database, so it never sorts the same email twice and any run can be undone. **It sorted my whole backlog with the Message Batches API: 6,547 emails for $1.54, taking the inbox from 6,494 emails to 60.** Step 5 is built: my own Gmail MCP server, whose tools can search and read emails, list my to-dos and save reply drafts, but never send, delete or archive. It works in Claude Desktop. Step 6 is built: a Drafter agent (Claude Sonnet) that writes replies in my style, using a writing-style file learned from my sent emails and the MCP server's tools, and a Critic (Claude Opus) that checks every draft before it can be saved. **Now: Step 7, the web page:** a FastAPI app with HTML templates, HTMX and Tailwind, with Action needed, Unsorted and History pages, and a two-stage read so that actions come with exact steps, links and deadlines. The first pieces are built: the web app runs on my computer, where only I can open it, with a shared layout (a menu for its three pages and the "Sort new emails" button), styled with Tailwind and the Inter font. The Action needed page lists my to-dos that are still in my inbox, one row per conversation with an "Open in Gmail" link, and Claude Desktop gets exactly the same list. When the Gmail login has expired, I sign in again from the page itself.
+**Status:** Steps 1 to 4 done. The agent sorts each email into one of 15 labels designed by Claude Opus and reviewed by me, flags what needs a reply or an action, and suggests new labels for emails that fit none. It adds the labels in Gmail and archives sorted emails, so the inbox only holds what still needs me. It records every decision in a database, so it never sorts the same email twice and any run can be undone. **It sorted my whole backlog with the Message Batches API: 6,547 emails for $1.54, taking the inbox from 6,494 emails to 60.** Step 5 is built: my own Gmail MCP server, whose tools can search and read emails, list my to-dos and save reply drafts, but never send, delete or archive. It works in Claude Desktop. Step 6 is built: a Drafter agent (Claude Sonnet) that writes replies in my style, using a writing-style file learned from my sent emails and the MCP server's tools, and a Critic (Claude Opus) that checks every draft before it can be saved. **Now: Step 7, the web page:** a FastAPI app with HTML templates, HTMX and Tailwind, with Action needed, Unsorted and History pages, and a two-stage read so that actions come with exact steps, links and deadlines. The first pieces are built: the web app runs on my computer, where only I can open it, with a shared layout (a menu for its three pages and the "Sort new emails" button), styled with Tailwind and the Inter font. A home page gives an overview: what needs me, new emails not sorted yet, Unsorted emails, the last sorting run and what sorting has cost. The Action needed page lists my to-dos that are still in my inbox, one row per conversation with an "Open in Gmail" link, and Claude Desktop gets exactly the same list. When the Gmail login has expired, I sign in again from the page itself.
 
 ## How it works
 
@@ -353,7 +353,7 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 - **It runs on my own computer** (`localhost`). Only my browser can open it, because it uses my Gmail login and API key. A demo version with made-up emails could go online later. That's the same amount of work with FastAPI as with Streamlit, except that hosting takes an hour more to set up.
 
 **Pages**
-- A menu bar with three pages, and a **"Sort new emails"** button that's always visible at the top.
+- A menu bar with three pages, and a **"Sort new emails"** button that's always visible at the top. Clicking "Inbox Agent" opens the home page, an overview (built in piece 1f).
   1. **Action needed:** two columns, like an email app. On the left, the list of everything that needs me (replies and other actions), with filters and counts, urgent items first, and duplicates from the same conversation grouped. On the right, the selected email with its details and buttons. When nothing needs me, an "all done" summary instead of an empty page.
   2. **Unsorted:** emails that fit no label, with the label each one suggests. I approve, edit or reject the suggestion, or pick a label myself.
   3. **History:** past runs, what was sorted where, undo, and a **"Needs action"** button to move anything the agent missed onto my Action list.
@@ -441,7 +441,7 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - Blue as the accent color, for the current menu item and the Sort button, on my light blue page with a white top bar and cards.
   - The Inter font, chosen now from five options rather than left for later. The app serves it itself instead of loading it from Google Fonts.
   - Made for my PC, but not broken on a phone: on a narrow screen the top bar wraps onto three lines.
-  - Action needed is the home page (`/`), next to `/unsorted` and `/history`. The top bar stays in view when scrolling, and each page has its own tab title.
+  - Action needed is the home page (`/`), next to `/unsorted` and `/history`. The top bar stays in view when scrolling, and each page has its own tab title. (In piece 1f, the home page became an overview, and Action needed moved to `/action-needed`.)
 - **Built:**
   - `web/templates/base.html`, the shared layout: the page's `<head>`, the top bar with the menu and the Sort button, and a slot for each page's content. `action.html`, `unsorted.html` and `history.html` fill that slot, and replace `hello.html`.
   - One route per page in `web/app.py`. Each tells the layout which menu item to highlight.
@@ -619,6 +619,27 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - Claude's answer said "24 items" while listing all 26: a counting slip by the model while summarizing. The numbers to trust come from code, like the page's count.
   - Claude pointed out to-dos that are probably done or out of date: an expired one-time code, an old check-in and a past event. They stay on the list until I archive them in Gmail. Piece 2's deadlines and a "Done" button (in What's left) are where that gets better.
 
+**Piece 1f: the home page**
+- **Decided:**
+  - **Six cards:** what needs me, new emails not sorted yet, Unsorted, replies waiting to be sent, the last sorting run, and what sorting has cost. Four are what I'd asked for. The new-emails card says when it's time to sort, and the cost card keeps an eye on my budget of a couple of dollars a month.
+  - **"Lately" means the last sorting run,** not the last 24 hours. Sorting is still started by hand, so "the last 24 hours" would say 0 on most days. It did: the last run was 6 days earlier.
+  - **Clicking "Inbox Agent" goes home,** as on most websites, rather than a fourth menu item. On the home page, no menu item is highlighted.
+  - **Cards in a grid:** three across on the PC, two on a tablet and one on a phone.
+  - Action needed moved to `/action-needed` and the home page took `/`, so signing in now ends on the home page without changing the sign-in code. The menu's links followed by themselves, because they're built from the page names.
+  - Numbers that need later pieces say so: replies waiting to be sent come with piece 6, and sorting from the page with piece 3. The cost card counts only sorting, the one cost the log records.
+- **Built:**
+  - `home()` in `web/app.py` and `templates/home.html`: one Gmail question (the inbox list), and everything else from the log.
+  - Three small functions in `database.py`: the last run in numbers, the number of Unsorted emails, and the sorting cost this month and in total. "New, not sorted yet" counts the inbox emails the log doesn't have, using the existing `is_processed()`.
+  - The browser tab says just "Inbox Agent" on the home page, and "Action needed · Inbox Agent" and so on elsewhere.
+- **Learned:**
+  - SQL can add things up: `COUNT` and `SUM` total thousands of rows inside the database, so only the totals come back to Python. `COALESCE` turns "nothing to add up" into 0.
+  - A CSS grid lays out cards in columns, and Tailwind's `sm:` and `lg:` prefixes change how many columns there are, depending on the screen's width.
+- **Result:**
+  - 14 tests passed. The home page shows 26 conversations that need me (24 need an action, 5 a reply), 26 new emails not sorted yet, 45 Unsorted, replies waiting "coming in piece 6", 99 emails in the last run (Mon 26 Oct: 87 archived, 12 need me), and $0.00 this month ($1.57 in total, for 6,588 emails). These match the numbers the test worked out separately from the log and Gmail. The cards lead to the right pages, Action needed works at its new address, and with Gmail unreachable the page shows the notice, "?" for new emails and the log's numbers. A faked sign-in ends on the home page with its green message.
+  - A page load takes about 0.4 seconds, like Action needed.
+  - Three cards across on the PC, one on a phone, and nothing sticks out sideways.
+- **Found:** 26 emails in my inbox haven't been sorted yet, and the last run was on 26 October. Sorting needs to be easier to start, which is what piece 3's button is for.
+
 ## What's left
 
 - [x] **Step 1:** First call to Claude
@@ -656,7 +677,7 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - [x] part 3: the inbox check, in a shared `todos.py`
   - [x] part 4: an "Open in Gmail" link that names my account
   - [x] part 5: Claude Desktop's `list_todos` uses the same list and connects fresh for every tool call
-- [ ] **Step 7, piece 1f:** a home page: what needs me, Unsorted emails, replies waiting to be sent, and what the agent did lately
+- [x] **Step 7, piece 1f:** a home page: what needs me, Unsorted emails, replies waiting to be sent, and what the agent did lately
 - [ ] **Step 7, piece 2:** the full-read step (Haiku, with Sonnet for unsure cases) and urgency
 - [ ] **Step 7, piece 3:** the "Sort new emails" button, with a summary of what arrived and what needs me
 - [ ] **Step 7, piece 4:** the Unsorted page: approve, edit or reject label suggestions, or pick a label by hand
