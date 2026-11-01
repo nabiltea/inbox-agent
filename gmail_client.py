@@ -15,6 +15,7 @@ import re
 import secrets
 import sys
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from email.message import EmailMessage
@@ -76,6 +77,12 @@ class WrongAccountError(SignInFailedError):
     """Someone signed in with a different Google account than the one the saved login belongs to."""
 
 
+# The messages that go with the first three errors, wherever they're raised.
+_LOGIN_EXPIRED = "The Gmail login has expired. Run 'python show_inbox.py' once to sign in again."
+_CANT_REACH_GOOGLE = "Couldn't reach Google. Check the internet connection."
+_GOOGLE_TEMPORARY = "Google has a temporary problem on its side. Try again in a few minutes."
+
+
 def get_gmail_service(allow_browser_sign_in=True):
     """Log in to Gmail and return an object for making Gmail API calls.
 
@@ -89,7 +96,7 @@ def get_gmail_service(allow_browser_sign_in=True):
     creds = _load_saved_login()
     if creds is None:
         if not allow_browser_sign_in:
-            raise SignInNeededError("The Gmail login has expired. Run 'python show_inbox.py' once to sign in again.")
+            raise SignInNeededError(_LOGIN_EXPIRED)
         creds = _sign_in()
     # cache_discovery=False switches off a cache this setup doesn't support (and its warning).
     return build("gmail", "v1", credentials=creds, cache_discovery=False)
@@ -182,6 +189,16 @@ def list_message_ids(service, label_id="INBOX", query=None, max_results=None):
             return ids
 
 
+def inbox_message_ids(service):
+    """The IDs of all the emails in my inbox right now, as a set.
+
+    For the web page. When the request fails, this raises one of this file's own errors,
+    so the page can say why (see _explain_failures).
+    """
+    with _explain_failures():
+        return set(list_message_ids(service, label_id="INBOX"))
+
+
 def get_emails(service, message_ids):
     """Fetch the sender, subject and preview of many emails, in the same order as the IDs.
 
@@ -248,7 +265,31 @@ def _is_temporary(error):
     """True for Gmail errors worth retrying later: rate limits and brief outages."""
     status = getattr(getattr(error, "resp", None), "status", None)
     reason = str(getattr(error, "reason", "")).lower()
-    return status in (429, 500, 503) or (status == 403 and ("quota" in reason or "rate" in reason))
+    return status in (429, 500, 502, 503, 504) or (status == 403 and ("quota" in reason or "rate" in reason))
+
+
+@contextmanager
+def _explain_failures():
+    """Turn Google's errors during a request into this file's own errors.
+
+    Used around the requests the web page makes, so it can say what went wrong without
+    knowing Google's libraries. Anything not listed here is unexpected and stays as it is,
+    so a real bug still shows up as one.
+    """
+    try:
+        yield
+    except HttpError as error:  # Gmail answered, with an error
+        if _is_temporary(error):  # including "too many requests"
+            raise GoogleTemporaryError(_GOOGLE_TEMPORARY) from error
+        if error.resp.status == 401:  # Gmail no longer accepts the login
+            raise SignInNeededError(_LOGIN_EXPIRED) from error
+        raise
+    except RefreshError as error:  # the short-lived access key needed renewing, and that failed
+        if _is_temporary_refusal(error):
+            raise GoogleTemporaryError(_GOOGLE_TEMPORARY) from error
+        raise SignInNeededError(_LOGIN_EXPIRED) from error
+    except (TransportError, HttpLib2Error, OSError) as error:  # no answer at all
+        raise GoogleUnreachableError(_CANT_REACH_GOOGLE) from error
 
 
 def list_labels(service):
@@ -415,10 +456,10 @@ def _load_saved_login():
     try:
         creds.refresh(Request())
     except TransportError as error:  # the request never got an answer
-        raise GoogleUnreachableError("Couldn't reach Google. Check the internet connection.") from error
+        raise GoogleUnreachableError(_CANT_REACH_GOOGLE) from error
     except RefreshError as error:  # Google answered, but refused to renew the login
         if _is_temporary_refusal(error):
-            raise GoogleTemporaryError("Google has a temporary problem on its side. Try again in a few minutes.") from error
+            raise GoogleTemporaryError(_GOOGLE_TEMPORARY) from error
         return None  # Google ended the login (every 7 days while the app is in testing)
     TOKEN_FILE.write_text(creds.to_json())
     return creds

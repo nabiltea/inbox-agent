@@ -40,8 +40,10 @@ from gmail_client import (
     SignInNeededError,
     finish_web_sign_in,
     get_gmail_service,
+    inbox_message_ids,
     start_web_sign_in,
 )
+from todos import list_todos
 
 # This folder (web/). Building paths from this file's own location means they work
 # whatever folder the server is started from.
@@ -79,58 +81,33 @@ _waiting = {}
 HOME = "/"
 
 
-def show_date(iso_text):
-    """A date like "Fri 24 Oct", with the year added if it isn't this year."""
-    date = datetime.fromisoformat(iso_text)
+def show_date(date):
+    """A date like "Fri 24 Oct", with the year added if it isn't this year.
+
+    How dates look is the page's business, so this stays here rather than in todos.py.
+    """
     text = f"{date:%a} {date.day} {date:%b}"
     return text if date.year == datetime.now().year else f"{text} {date.year}"
 
 
-def todos_for_page(rows):
-    """Turn the flagged emails from the log into the rows of the to-do list: one per conversation.
-
-    Some conversations have many flagged emails, like a long back-and-forth with a buyer.
-    rows come newest first, so the first one seen for each conversation is its newest email,
-    and that one decides what the row says. "more" counts the conversation's other flagged
-    emails. Everything the template shows is worked out here, so the template only draws.
-    """
-    todos = {}
-    for row in rows:
-        if row["thread_id"] in todos:
-            todos[row["thread_id"]]["more"] += 1
-            continue
-        if row["needs_action"] and row["action"]:
-            text = row["action"]  # what triage said to do, like "Sign the contract on Dropbox Sign"
-        elif row["needs_reply"]:
-            text = f"Reply to {row['sender']}"
-        else:
-            text = row["subject"]
-        todos[row["thread_id"]] = {
-            "needs_action": bool(row["needs_action"]),
-            "needs_reply": bool(row["needs_reply"]),
-            "text": text,
-            "sender": row["sender"],
-            "subject": row["subject"],
-            "date": show_date(row["received_at"]),
-            "label": row["label"],
-            "more": 0,
-        }
-    return list(todos.values())  # a dictionary keeps the order things were added: newest first
+# Lets the templates use show_date as a "filter": {{ todo.received|show_date }}
+templates.env.filters["show_date"] = show_date
 
 
-def connect_to_gmail():
-    """Make a new Gmail connection for this page load, or say why it can't be made.
+def check_inbox():
+    """Ask Gmail which emails are in my inbox, for this page load.
 
-    Every page load makes its own connection instead of sharing one: FastAPI may handle
-    two page loads at the same time, and Google's library can't be used by two at once.
-    A new connection also reads token.json again, so a new sign-in works straight away.
+    Returns (the IDs, None), or (None, problem), where problem is "sign_in" if Google
+    has ended the login, "offline" if Google couldn't be reached, or "google_problem"
+    if Google has a temporary problem on its side.
 
-    Returns (connection, None), or (None, problem), where problem is "sign_in" if Google
-    has ended the login, "offline" if Google couldn't be reached, or "google_problem" if
-    Google has a temporary problem on its side.
+    Every page load makes its own Gmail connection instead of sharing one: FastAPI may
+    handle two page loads at the same time, and Google's library can't be used by two at
+    once. A new connection also reads token.json again, so a new sign-in works straight away.
     """
     try:
-        return get_gmail_service(allow_browser_sign_in=False), None
+        gmail = get_gmail_service(allow_browser_sign_in=False)
+        return inbox_message_ids(gmail), None
     except SignInNeededError:
         return None, "sign_in"
     except GoogleUnreachableError:
@@ -146,20 +123,20 @@ def connect_to_gmail():
 @app.get("/")
 def action_needed(request: Request):
     """Action needed: everything that needs a reply or an action from me, one row per conversation."""
-    # The Gmail connection isn't used yet: the inbox check comes in part 3 of piece 1e.
-    # For now, connecting tells the page whether Gmail can be reached, for the notice.
-    gmail, gmail_problem = connect_to_gmail()
+    # The two lists the to-do recipe (todos.py) works from: what's in my inbox, from
+    # Gmail, and what the agent flagged, from its log.
+    inbox_ids, gmail_problem = check_inbox()
     # A new database connection for every page load: FastAPI may handle each request on a
     # different thread, and a SQLite connection only works on the thread that opened it.
     # closing() closes it again afterwards, even if something goes wrong.
     with closing(database.connect()) as conn:
-        rows = database.open_todos(conn)
+        flagged = database.flagged_emails(conn)
     return templates.TemplateResponse(
         request=request,  # the browser's request, which templates need to build links
         name="action.html",
         context={  # the values the template can use
             "active": "action_needed",
-            "todos": todos_for_page(rows),
+            "todos": list_todos(flagged, inbox_ids),
             "gmail_problem": gmail_problem,  # None, or why Gmail couldn't be checked
             "message": _waiting.pop("message", None),  # shown once, after signing in
         },

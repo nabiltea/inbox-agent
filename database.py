@@ -92,12 +92,12 @@ def recent_todos(conn, since):
     """, (since.isoformat(),)).fetchall()
 
 
-def open_todos(conn):
+def flagged_emails(conn):
     """Emails flagged as needing a reply or an action that the agent left in the inbox, newest first.
 
     Unlike recent_todos, there's no time limit: a flagged email that's still in the inbox
     is still a to-do, however old it is. This only knows what the agent did, so an email
-    I've archived myself since is still included.
+    I've archived myself since is still included. todos.py leaves those out.
     """
     return conn.execute("""
         SELECT * FROM decisions

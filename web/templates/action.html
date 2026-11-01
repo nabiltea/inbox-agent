@@ -17,7 +17,8 @@
   </div>
 
   {% if todos %}
-    {# One row per conversation, newest first. app.py has already worked out what each row says. #}
+    {# One row per conversation, newest first. todos.py has already worked out what each row
+       says; the page only decides how the date looks (show_date in app.py). #}
     <ul class="mt-4 divide-y divide-gray-200 rounded-lg bg-white shadow-sm">
       {% for todo in todos %}
         <li class="flex items-start gap-4 px-5 py-4">
@@ -31,9 +32,9 @@
             {% endif %}
           </div>
           <div class="min-w-0">
-            <p class="font-medium">{{ todo.text }}</p>
+            <p class="font-medium">{{ todo.what_to_do }}</p>
             <p class="mt-0.5 text-sm text-gray-500">
-              {{ todo.sender }} · {{ todo.subject }} · {{ todo.date }} · {{ todo.label }}
+              {{ todo.sender }} · {{ todo.subject }} · {{ todo.received|show_date }} · {{ todo.label }}
               {% if todo.more %}
                 · <span class="text-blue-600">+{{ todo.more }} more in this conversation</span>
               {% endif %}
