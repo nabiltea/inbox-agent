@@ -672,6 +672,32 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - The "why" sometimes says "you", and sometimes "me" or my name. Asking for "you" throughout, which reads best on the page, is a small change to the instructions.
   - **Found and fixed: my rules left invitations out.** The dry run cleared a LinkedIn connection request and a shared Google Doc, because the instructions said that things I could do if I wanted need nothing, and never mentioned invitations. It wasn't that I'd accepted the request: the reader only sees the email, not LinkedIn. After the new rule, both invitations count in the first look and the full read ("answer an invitation", now a kind of its own), and three look-alikes still need nothing: a "people you may know" suggestion, an "accepted your invitation" notice and a birthday reminder. That check cost $0.004.
 
+**Piece 2, part 2: the log remembers each full read**
+- **Decided:**
+  - **Full reads get a table of their own, `full_reads`,** by the rules of database design ("normalization") from a data management course I took.
+    - **Two rules allowed either design.** One value per cell (first normal form), and every column depends on the row's key: the whole key, and nothing but the key (second and third normal form). On their own, these allow either a table of its own or new columns on each email's row.
+    - **Optional data decided it.** Most emails never get a full read: all 6,588 sorted before it existed, and the routine labels. New columns would be mostly empty, and optional data is usually better kept in a table of its own.
+    - **So did being a thing of its own.** A full read is an event with its own time, model and cost. On the email's row, it would need a second "model" and "cost" column, told apart by a prefix, which is a classic sign that one row holds two things.
+    - **The cost is small:** the to-do list combines the two tables with a join, and undo deletes from both.
+  - **The steps are stored as JSON,** a deliberate exception to "one value per cell". They're always saved, read and shown together, in order, and never searched or counted one by one. A steps table would be by the book, but more code for nothing gained.
+  - **The full read has the last word:** an email needs me if its full read says yes or, when it has none, if triage's first look flagged it.
+  - Three fixes to the instructions, from part 1's dry run: "where" leads with the name, "time-sensitive" only applies without a date, and the "why" speaks to me as "you".
+- **Built:**
+  - The `full_reads` table in `database.py`, linked to `decisions` by the email's ID with a foreign key. ON DELETE CASCADE removes an email's full read when its row goes, for example with undo. `PRAGMA foreign_keys = ON` switches the link on for every connection, because SQLite leaves it off.
+  - `save_full_read()`. `flagged_emails()` now combines each email with its full read (a LEFT JOIN) and lets the full read decide.
+- **Learned:**
+  - Normalization: first, second and third normal form, and three questions for choosing between a new column and a new table. Can one row have several? Does every row have one (or is it optional)? Is it a thing of its own?
+  - A foreign key links a row to a row in another table, and ON DELETE CASCADE deletes the linked rows along with it. In SQLite, the check is off unless each connection switches it on.
+  - A LEFT JOIN keeps every row of the first table, with empty (NULL) columns where the second table has nothing.
+- **Result:**
+  - 12 tests passed, on a copy of the log:
+    - **The new table** came with every email's row unchanged: 6,588 rows, the same 18 columns.
+    - **The fixes worked.** Six emails re-read with the new instructions, for $0.0096, came back with a payment's deadline and no "time-sensitive", every "where" leading with the name, and every "why" speaking to me as "you".
+    - **Saving and reading back** gave exactly the same full reads, with the steps as a list and the deadline as a date.
+    - **The full read has the last word:** a flagged email whose full read said no dropped off the to-do list, and an unflagged one whose full read said yes joined it.
+    - **The link holds:** a full read for an email the log doesn't know was refused, and undoing a run removed its full reads, with none left behind.
+  - The real log only got the new, empty table: 6,588 emails and 0 full reads. The pages and Claude Desktop's list are unchanged, with 26 conversations.
+
 ## What's left
 
 - [x] **Step 1:** First call to Claude
@@ -712,7 +738,7 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 - [x] **Step 7, piece 1f:** a home page: what needs me, Unsorted emails, replies waiting to be sent, and what the agent did lately
 - [ ] **Step 7, piece 2:** the full-read step (Haiku, with Sonnet for unsure cases) and urgency, in four parts:
   - [x] part 1: the full read itself, with a dry run on real emails
-  - [ ] part 2: saving the results in the log
+  - [x] part 2: saving the results in the log, in a table of their own
   - [ ] part 3: urgency, shown on the page and to Claude Desktop
   - [ ] part 4: triage runs the full read for new emails, before deciding what to archive
 - [ ] **Step 7, piece 3:** the "Sort new emails" button, with a summary of what arrived and what needs me

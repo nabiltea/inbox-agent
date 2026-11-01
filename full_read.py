@@ -89,14 +89,16 @@ class FullRead(BaseModel):
     kind: Literal[KINDS] | None = Field(description="What I have to do. null if needs_me is no.")
     steps: list[str] = Field(description="What exactly to do, as 1 to 4 short steps in order. Empty if needs_me is no.")
     where: str | None = Field(
-        description="Where to do it: the site or app by name and main web address, like 'Dropbox Sign (dropbox.com)'. "
-        "Some link sites only track clicks: name the real site. null for a reply by email, or if needs_me is no."
+        description="Where to do it: first the name of the site or app, then its main web address in brackets, "
+        "without parts like 'app.' or 'www.', like 'Dropbox Sign (dropbox.com)'. Some link sites only track clicks: "
+        "name the real site. null for a reply by email, or if needs_me is no."
     )
     deadline: date | None = Field(description="The date it has to be done by, if the email gives one. null otherwise.")
     time_sensitive: bool = Field(
-        description="true if it has to happen soon but the email gives no date, like 'today' or 'as soon as possible'."
+        description="true only if it has to happen soon and the email gives no date, like 'today' or "
+        "'as soon as possible'. false whenever there is a deadline."
     )
-    reason: str = Field(description="Why, in one short sentence in English.")
+    reason: str = Field(description="Why, in one short sentence in English, speaking to me as 'you'.")
 
 
 class Review(FullRead):

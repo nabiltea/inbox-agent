@@ -5,6 +5,7 @@ Python, so there's nothing to install. The database lets the agent skip emails
 it has already sorted, undo a run, and later feed the web page's daily summary.
 """
 
+import json
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -46,6 +47,33 @@ def connect():
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(decisions)")}
     if "archived" not in columns:
         conn.execute("ALTER TABLE decisions ADD COLUMN archived INTEGER DEFAULT 0")
+
+    # What full_read.py found, for the emails that got a full read. Most never do (the
+    # routine labels, and every email sorted before the full read existed), and a full
+    # read is an event of its own, with its own time, model and cost. So by the rules of
+    # database design ("normalization") it gets a table of its own, rather than mostly
+    # empty columns in decisions. message_id links each full read to its email's row,
+    # and ON DELETE CASCADE removes it when that row goes, for example with undo.
+    # The steps are a list stored as JSON: a deliberate exception to "one value per
+    # cell", because they're always saved, read and shown together, in order.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS full_reads (
+            message_id TEXT PRIMARY KEY REFERENCES decisions(message_id) ON DELETE CASCADE,
+            read_at TEXT,
+            needs_me TEXT,
+            kind TEXT,
+            steps TEXT,
+            place TEXT,
+            deadline TEXT,
+            time_sensitive INTEGER,
+            reason TEXT,
+            model TEXT,
+            cost REAL
+        )
+    """)
+    # SQLite only enforces links between tables (like the one above) when this is
+    # switched on, and only for this connection, so it's switched on every time.
+    conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 
@@ -83,17 +111,47 @@ def save_decision(conn, run_id, email, result, label_added, archived, model, cos
     conn.commit()  # save to the file now, so a crash halfway through a run loses nothing
 
 
-def flagged_emails(conn):
-    """Emails flagged as needing a reply or an action that the agent left in the inbox, newest first.
+def save_full_read(conn, message_id, result, model, cost):
+    """Record what the full read found for one email (see full_read.py).
 
-    There's no time limit: a flagged email that's still in the inbox is still a to-do,
-    however old it is. This only knows what the agent did, so an email I've archived
-    myself since is still included. todos.py leaves those out.
+    The email must already have its row in decisions: the link between the tables
+    refuses a full read for an email the log doesn't know. Reading an email again
+    replaces its earlier full read.
+    """
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO full_reads (
+            message_id, read_at, needs_me, kind, steps, place, deadline, time_sensitive, reason, model, cost
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            message_id, datetime.now().isoformat(timespec="seconds"), result.needs_me, result.kind,
+            json.dumps(result.steps, ensure_ascii=False), result.where,
+            result.deadline.isoformat() if result.deadline else None, result.time_sensitive, result.reason, model, cost,
+        ),
+    )
+    conn.commit()
+
+
+def flagged_emails(conn):
+    """The emails that need me and that the agent left in the inbox, newest first, with their full read if any.
+
+    An email needs me if its full read says yes or, when it had no full read, if
+    triage's first look flagged it: the full read has the last word. There's no time
+    limit: an email that needs me is still a to-do however old it is. This only knows
+    what the agent did, so an email I've archived myself since is still included.
+    todos.py leaves those out.
+
+    LEFT JOIN adds each email's full read from full_reads, and leaves those columns
+    empty (NULL) for an email that has none.
     """
     return conn.execute("""
-        SELECT * FROM decisions
-        WHERE (needs_reply = 1 OR needs_action = 1) AND archived = 0
-        ORDER BY received_at DESC
+        SELECT decisions.*, f.needs_me AS full_read, f.kind, f.steps, f.place, f.deadline, f.time_sensitive,
+               f.reason AS full_read_reason
+        FROM decisions LEFT JOIN full_reads AS f ON f.message_id = decisions.message_id
+        WHERE decisions.archived = 0
+          AND (f.needs_me = 'yes' OR (f.needs_me IS NULL AND (decisions.needs_reply = 1 OR decisions.needs_action = 1)))
+        ORDER BY decisions.received_at DESC
     """).fetchall()
 
 
