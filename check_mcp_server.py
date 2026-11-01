@@ -48,10 +48,10 @@ async def main():
         for email in emails:
             print(f"  {email['date']}  {email['subject'][:55]}  {email['labels']}")
 
-        todos = data(await client.call_tool("list_todos", {"days": 14}))
-        print(f"\nlist_todos(14 days): {len(todos)} to-dos")
+        todos = data(await client.call_tool("list_todos", {}))
+        print(f"\nlist_todos: {len(todos)} conversations")
         for todo in todos[:5]:
-            print(f"  {todo['label']:<16} {todo['action'] or 'reply'}")
+            print(f"  {todo['label']:<16} {todo['what_to_do'][:60]}")
 
         thread_id = (todos or emails)[0]["thread_id"]
         thread = data(await client.call_tool("read_thread", {"thread_id": thread_id}))

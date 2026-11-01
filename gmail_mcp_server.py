@@ -14,8 +14,8 @@ Run it by hand with:  python gmail_mcp_server.py
 (It then waits silently for an app to talk to it. Stop it with Ctrl+C.)
 """
 
-import threading
-from datetime import datetime, timedelta
+from contextlib import closing
+from dataclasses import asdict
 from typing import Any
 
 from mcp.server.mcpserver import MCPServer
@@ -23,12 +23,16 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
 import database
+import todos
 from gmail_client import (
     create_reply_draft as save_reply_draft,
     get_emails,
     get_gmail_service,
     get_thread,
+    gmail_link,
+    inbox_message_ids,
     list_message_ids,
+    saved_account,
 )
 
 server = MCPServer(
@@ -46,30 +50,29 @@ server = MCPServer(
 READ_ONLY = ToolAnnotations(read_only_hint=True)
 SAVES_DRAFT = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False)
 
-# The app may call several tools at the same time, each on its own thread, but
-# Google's client library can't safely be used by two threads at once. This lock
-# makes them take turns.
-_gmail_lock = threading.Lock()
-_gmail = None
 _label_names = None
 
 
 def gmail():
-    """The logged-in Gmail connection, created the first time a tool needs it."""
-    global _gmail
-    if _gmail is None:
-        try:
-            _gmail = get_gmail_service(allow_browser_sign_in=False)
-        except RuntimeError as error:
-            raise ToolError(str(error))  # shown to the model, which can tell the user
-    return _gmail
+    """A new Gmail connection for this tool call.
+
+    Every tool call makes its own, like the web page's page loads. The app may call
+    several tools at the same time, each on its own thread, and Google's library can't
+    be used by two threads at once, so nothing is shared. A new connection also reads
+    token.json again: after Google ends the login, signing in again (with the web page's
+    button, for example) works straight away, without restarting the app.
+    """
+    try:
+        return get_gmail_service(allow_browser_sign_in=False)
+    except RuntimeError as error:
+        raise ToolError(str(error))  # shown to the model, which can tell the user
 
 
-def label_names():
-    """{label ID: label name} for all my labels, looked up once."""
+def label_names(service):
+    """{label ID: label name} for all my labels, looked up the first time and then remembered."""
     global _label_names
     if _label_names is None:
-        labels = gmail().users().labels().list(userId="me").execute()["labels"]
+        labels = service.users().labels().list(userId="me").execute()["labels"]
         _label_names = {label["id"]: label["name"] for label in labels}
     return _label_names
 
@@ -84,10 +87,10 @@ def search_emails(query: str, max_results: int = 10) -> list[dict]:
     subject, date, a short preview and its labels. Use read_thread with the
     thread ID to read a whole conversation.
     """
-    with _gmail_lock:
-        ids = list_message_ids(gmail(), label_id=None, query=query, max_results=min(max_results, 50))
-        emails = get_emails(gmail(), ids)
-        names = label_names()
+    service = gmail()
+    ids = list_message_ids(service, label_id=None, query=query, max_results=min(max_results, 50))
+    emails = get_emails(service, ids)
+    names = label_names(service)
     return [
         {
             "message_id": email.id,
@@ -108,36 +111,37 @@ def read_thread(thread_id: str) -> dict[str, Any]:
 
     Very long messages are cut off. Get thread IDs from search_emails or list_todos.
     """
-    with _gmail_lock:
-        return get_thread(gmail(), thread_id)
+    return get_thread(gmail(), thread_id)
 
 
 @server.tool(annotations=READ_ONLY)
-def list_todos(days: int = 14) -> list[dict]:
-    """My to-do list: recent emails that need a reply or an action from me and are still in my inbox.
+def list_todos() -> list[dict]:
+    """My to-do list: one entry per conversation that needs a reply or an action from me, newest first.
 
-    The inbox agent flags these when it sorts my email. "action" says what to do,
-    for example "Sign the contract on Dropbox Sign". days is how far back to look.
+    The same list as the Action needed page of my web app. The inbox agent flags emails
+    when it sorts my email, and a to-do stays on the list until I archive it in Gmail.
+    Each entry describes the conversation's newest flagged email still in my inbox:
+    "what_to_do" says what to do, for example "Sign the contract on Dropbox Sign", and
+    "more" counts the conversation's other flagged emails still in my inbox. Use
+    read_thread with "thread_id" to read the whole conversation, and give me
+    "gmail_link" when I want to open it in Gmail.
     """
-    rows = database.recent_todos(database.connect(), since=datetime.now() - timedelta(days=days))
-    with _gmail_lock:
-        # Only emails still in the inbox: once I've dealt with one and archived it, it's done.
-        emails = get_emails(gmail(), [row["message_id"] for row in rows])
-    in_inbox = {email.id for email in emails if "INBOX" in email.label_ids}
+    service = gmail()
+    try:
+        inbox_ids = inbox_message_ids(service)
+    except RuntimeError as error:
+        # No list rather than one that may include emails I've already archived.
+        raise ToolError(str(error))
+    with closing(database.connect()) as conn:
+        flagged = database.flagged_emails(conn)
+    address = saved_account()
     return [
         {
-            "message_id": row["message_id"],
-            "thread_id": row["thread_id"],
-            "from": row["sender"],
-            "subject": row["subject"],
-            "date": row["received_at"],
-            "label": row["label"],
-            "needs_reply": bool(row["needs_reply"]),
-            "needs_action": bool(row["needs_action"]),
-            "action": row["action"],
+            **asdict(todo),
+            "received": todo.received.isoformat(timespec="minutes"),
+            "gmail_link": gmail_link(todo.thread_id, address) if address else None,
         }
-        for row in rows
-        if row["message_id"] in in_inbox
+        for todo in todos.list_todos(flagged, inbox_ids)
     ]
 
 
@@ -151,8 +155,7 @@ def create_reply_draft(thread_id: str, body: str, reply_all: bool = False) -> di
     By default it goes only to that message's sender. Set reply_all to true only
     when I asked for Reply all: then everyone else on that message goes in Cc.
     """
-    with _gmail_lock:
-        return save_reply_draft(gmail(), thread_id, body, reply_all)
+    return save_reply_draft(gmail(), thread_id, body, reply_all)
 
 
 if __name__ == "__main__":

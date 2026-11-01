@@ -5,8 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   {# Each page puts its own name in front, like "Action needed · Inbox Agent" #}
   <title>{% block title %}{% endblock %} · Inbox Agent</title>
-  {# The CSS that Tailwind's program builds from the classes used in the templates #}
-  <link rel="stylesheet" href="{{ url_for('static', path='app.css').path }}">
+  {# The CSS that Tailwind's program builds from the classes used in the templates. The ?v=
+     fingerprint changes whenever the file does, so browsers fetch the new one (see app.py). #}
+  <link rel="stylesheet" href="{{ url_for('static', path='app.css').path }}?v={{ file_version('app.css') }}">
 </head>
 <body class="min-h-screen bg-blue-100 text-gray-900">
   {# The top bar, the same on every page. sticky top-0 keeps it in view when the page scrolls. #}

@@ -22,6 +22,7 @@ While editing templates, add --watch and leave it running in a second terminal: 
 rebuilds the CSS every time a file is saved. (A public site would add --minify.)
 """
 
+import hashlib
 import mimetypes
 from contextlib import closing
 from datetime import datetime
@@ -40,7 +41,9 @@ from gmail_client import (
     SignInNeededError,
     finish_web_sign_in,
     get_gmail_service,
+    gmail_link,
     inbox_message_ids,
+    saved_account,
     start_web_sign_in,
 )
 from todos import list_todos
@@ -70,6 +73,21 @@ app.mount("/static", StaticFiles(directory=WEB_DIR / "static"), name="static")
 # so the font was sent as an unknown file, "application/octet-stream". This adds it.
 mimetypes.add_type("font/woff2", ".woff2")
 
+
+def file_version(path):
+    """A short fingerprint of a file in web/static/, for its link, like app.css?v=9c5b2e95.
+
+    Browsers keep a copy of files like the CSS, and since the server doesn't say for how
+    long, they may keep reusing an outdated copy after the CSS is rebuilt. The fingerprint
+    changes whenever the file does, so the link changes too and the browser fetches the
+    new file. While the file stays the same, the browser can keep using its copy.
+    """
+    return hashlib.sha256((WEB_DIR / "static" / path).read_bytes()).hexdigest()[:8]
+
+
+# Lets the templates call file_version(...), the way they call url_for(...)
+templates.env.globals["file_version"] = file_version
+
 # Kept in the server's memory from one page load to the next. The app has one user, so
 # one of each is enough: the sign-in in progress, until Google sends the browser back,
 # and a message to show once on the next page. pop() takes a value out in one step, so
@@ -92,6 +110,11 @@ def show_date(date):
 
 # Lets the templates use show_date as a "filter": {{ todo.received|show_date }}
 templates.env.filters["show_date"] = show_date
+
+
+# Lets the templates call gmail_link(...) from gmail_client.py directly, the way they
+# call url_for(...). The MCP server uses the same function, so both give the same links.
+templates.env.globals["gmail_link"] = gmail_link
 
 
 def check_inbox():
@@ -137,6 +160,9 @@ def action_needed(request: Request):
         context={  # the values the template can use
             "active": "action_needed",
             "todos": list_todos(flagged, inbox_ids),
+            # For the "Open in Gmail" links: read from the saved login, so no request to Gmail.
+            # The links work even when the app can't reach Gmail: Chrome has its own sign-in.
+            "gmail_address": saved_account(),
             "gmail_problem": gmail_problem,  # None, or why Gmail couldn't be checked
             "message": _waiting.pop("message", None),  # shown once, after signing in
         },

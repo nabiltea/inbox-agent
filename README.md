@@ -2,7 +2,7 @@
 
 An AI agent that organizes my Gmail. It sorts every email into labels, flags the emails that need a reply or an action from me, drafts replies, and shows everything on a web page with a daily summary. Several Claude models work together, each with its own job, and nothing is ever sent without my approval.
 
-**Status:** Steps 1 to 4 done. The agent sorts each email into one of 15 labels designed by Claude Opus and reviewed by me, flags what needs a reply or an action, and suggests new labels for emails that fit none. It adds the labels in Gmail and archives sorted emails, so the inbox only holds what still needs me. It records every decision in a database, so it never sorts the same email twice and any run can be undone. **It sorted my whole backlog with the Message Batches API: 6,547 emails for $1.54, taking the inbox from 6,494 emails to 60.** Step 5 is built: my own Gmail MCP server, whose tools can search and read emails, list my to-dos and save reply drafts, but never send, delete or archive. It works in Claude Desktop. Step 6 is built: a Drafter agent (Claude Sonnet) that writes replies in my style, using a writing-style file learned from my sent emails and the MCP server's tools, and a Critic (Claude Opus) that checks every draft before it can be saved. **Now: Step 7, the web page:** a FastAPI app with HTML templates, HTMX and Tailwind, with Action needed, Unsorted and History pages, and a two-stage read so that actions come with exact steps, links and deadlines. The first pieces are built: the web app runs on my computer, where only I can open it, with a shared layout (a menu for its three pages and the "Sort new emails" button), styled with Tailwind and the Inter font. The Action needed page lists my to-dos that are still in my inbox, one row per conversation, and when the Gmail login has expired, I sign in again from the page itself.
+**Status:** Steps 1 to 4 done. The agent sorts each email into one of 15 labels designed by Claude Opus and reviewed by me, flags what needs a reply or an action, and suggests new labels for emails that fit none. It adds the labels in Gmail and archives sorted emails, so the inbox only holds what still needs me. It records every decision in a database, so it never sorts the same email twice and any run can be undone. **It sorted my whole backlog with the Message Batches API: 6,547 emails for $1.54, taking the inbox from 6,494 emails to 60.** Step 5 is built: my own Gmail MCP server, whose tools can search and read emails, list my to-dos and save reply drafts, but never send, delete or archive. It works in Claude Desktop. Step 6 is built: a Drafter agent (Claude Sonnet) that writes replies in my style, using a writing-style file learned from my sent emails and the MCP server's tools, and a Critic (Claude Opus) that checks every draft before it can be saved. **Now: Step 7, the web page:** a FastAPI app with HTML templates, HTMX and Tailwind, with Action needed, Unsorted and History pages, and a two-stage read so that actions come with exact steps, links and deadlines. The first pieces are built: the web app runs on my computer, where only I can open it, with a shared layout (a menu for its three pages and the "Sort new emails" button), styled with Tailwind and the Inter font. The Action needed page lists my to-dos that are still in my inbox, one row per conversation with an "Open in Gmail" link, and Claude Desktop gets exactly the same list. When the Gmail login has expired, I sign in again from the page itself.
 
 ## How it works
 
@@ -30,7 +30,7 @@ Built so far: `gmail_client.py`, Triage (including applying labels in Gmail), th
 |---|---|---|
 | `search_emails` | Searches all mail with Gmail's search syntax, and returns sender, subject, date, preview and labels | No |
 | `read_thread` | Returns a whole conversation: each message's sender, recipients, date and text | No |
-| `list_todos` | Recent emails the agent flagged as needing a reply or an action that are still in the inbox | No |
+| `list_todos` | My to-do list: one entry per conversation the agent flagged as needing a reply or an action that's still in my inbox, the same list as the web page | No |
 | `create_reply_draft` | Saves a reply inside a conversation as a draft. It is never sent. Reply by default, Reply all only when asked | Only adds a draft |
 
 There is deliberately no tool to send, delete, archive or relabel anything.
@@ -126,7 +126,7 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 - **Dry run by default.** `triage.py` only changes Gmail when you add `--apply`. Running it without that is always safe.
 - **To-dos only for recent emails.** Emails older than 30 days are archived even if flagged as needing a reply or an action, because they've been dealt with. The flags are still logged, as test data for the model.
 - **stdout belongs to MCP.** An MCP server talks to its app over stdin/stdout, so any stray `print()` would break the connection. All messages in `gmail_client.py` go to stderr instead. The server also never opens a browser to sign in, because nobody would see it. If the Gmail login has expired, the tool says so, and I sign in by running a script.
-- **One Gmail request at a time in the server.** Apps can call several tools at once, each on its own thread, but Google's client library isn't safe to use from two threads at once. A lock makes the tools take turns.
+- **One Gmail request at a time in the server.** Apps can call several tools at once, each on its own thread, but Google's client library isn't safe to use from two threads at once. A lock makes the tools take turns. (Replaced in Step 7, piece 1e, part 5: every tool call now makes its own connection, so nothing is shared.)
 - **Bulk where it pays.** Fetching emails uses Gmail batch requests (50 at a time). The 6,500-email backlog will use Claude's Message Batches API (half price, results within hours), while the daily run stays one email at a time, since that's only a few emails.
 - **Gmail labels aren't folders.** An email is stored once, whatever its labels. "Inbox" is just another label, and archiving removes it. So labeling and archiving don't change storage. The point of archiving is a clear inbox, not saving space.
 - **Database migrations.** When the log gained an `archived` column, `database.py` adds it to existing database files automatically, instead of requiring the old log to be deleted.
@@ -433,7 +433,7 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - The browser shows a white card, 576 px wide and centered, with rounded corners and a shadow, on a light gray page. While trying out the watcher, I changed the page to light blue (`bg-blue-100`) and kept it.
   - Requests for files outside `web/static/`, like `/static/../../token.json`, get "404 Not Found".
   - The watcher (`--watch`) uses about 94 MB of memory and almost no processor time: 0.14 seconds in total, including its first build and two rebuilds. A rebuild after saving a template takes under half a millisecond.
-- **Found:** the app doesn't tell browsers how long to keep the CSS (there's no `Cache-Control` header), so a browser may reuse its saved copy for a short while after a rebuild. Ctrl+F5 reloads the page without it. The usual fix is a version number in the CSS link, for later.
+- **Found:** the app doesn't tell browsers how long to keep the CSS (there's no `Cache-Control` header), so a browser may reuse its saved copy for a short while after a rebuild. Ctrl+F5 reloads the page without it. The usual fix is a version number in the CSS link, for later. (Done in piece 1e, part 4, after it actually happened.)
 
 **Piece 1c: the layout**
 - **Decided:**
@@ -565,11 +565,59 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
     - Eight kinds of failure while asking Gmail (a server error, too many requests, the per-user rate limit, an ended login, two kinds of no internet, and a refused or failed login renewal), each with the right notice above the log's list. Failures while connecting still work as in part 1.
     - Faked archiving on the real page: archiving a whole conversation removes its row, and archiving the newest email of the 16-email conversation turns "+15 more" into "+14 more".
   - My inbox holds 87 emails, including all 62 flagged ones, so the page still shows all 28 conversations: I haven't archived a single to-do yet.
+  - **The real thing:** I archived two to-dos I'd already dealt with (two LinkedIn updates) in Gmail, and on the next reload they were gone: 26 conversations left.
   - A page load now takes about 0.37 seconds instead of 7 ms, nearly all of it waiting for Gmail's answer.
 - **Found:**
   - Two of my made-up tests expected the wrong thing, and the code was right both times. A to-do that needs a reply and an action but has no action text says "Reply to [name]", the rule from 1d. And a partly archived conversation moves down the list.
   - Around 15:00, two test runs in a row hit a failed Gmail question. That check didn't yet print what failed, so the cause is unknown, most likely a short network blip. The 70 questions afterwards, each on a new connection like the page's, all worked. On the page, a blip like that shows a notice for one load, and the next load works.
   - For now, marking a to-do as done means archiving it in Gmail. A "Done" button on the page would have to archive in Gmail, so that's a decision for a later piece.
+
+**Piece 1e, part 4: an "Open in Gmail" link that names my account**
+- **Decided:**
+  - **The link names my account with Gmail's `authuser` setting** and opens the conversation: `https://mail.google.com/mail/?authuser=<my address>#inbox/<conversation ID>`. Without `authuser`, Chrome opens its default Google account, which on my PC isn't the one the agent sorts.
+  - **My address comes from the saved login,** where signing in records it straight from Gmail (part 2). That costs no request to Gmail, where asking on every page load would add about a third of a second, and token.json stays out of Git.
+  - **The links stay when the app can't reach Gmail,** because they open Gmail in Chrome, which has its own sign-in. Without a known account, there are no links rather than links to the wrong account.
+  - A small "Open in Gmail ↗" that opens a new tab and tells Gmail nothing about the page it came from (`rel="noopener noreferrer"`). Screen readers hear "(opens in a new tab)" instead of the arrow.
+  - **Each link starts a line of its own, under the rest of its row,** on every screen. I preferred one tidy place for all of them over a link on the right.
+- **Built:**
+  - `gmail_link()` in `web/app.py` builds a row's link. The template calls it the way it calls `url_for()`.
+  - `saved_account()` in `gmail_client.py`, now public, reads my address from token.json.
+  - The link on each row of `action.html`.
+  - A fingerprint in the CSS link (`app.css?v=…`), made by `file_version()` in `web/app.py`, so browsers fetch the CSS again whenever it changes.
+- **Learned:**
+  - The part of a web address after `#` (the "fragment") never goes to the server: the page reads it in the browser. Gmail uses it to know which conversation to open.
+  - Inside a link, some characters are written as codes, like `@` as `%40`.
+  - Browsers keep copies of files like the CSS. When the server doesn't say for how long, the browser decides by itself, and it may keep using an outdated copy. Putting a fingerprint of the file in its link ("cache busting") changes the link whenever the file changes.
+- **Result:**
+  - 8 tests passed: one link per row (26), each naming my account and its own row's conversation and opening in a new tab; no extra request to Gmail (a page load still takes about 0.4 seconds); the links stay under the sign-in notice; and there are no links without a known account.
+  - **The real thing:** I clicked a link in Chrome, which normally opens my other Google account. Gmail opened in my main account, on the right conversation.
+  - Every link starts its own line at the row's left edge, on the PC and at phone width, where the to-do text keeps a 207-pixel column.
+- **Found and fixed:**
+  - My first layout kept the link on the right, even on a phone, which squeezed the to-do text into an 84-pixel column, about one word per line.
+  - **Chrome reused an outdated CSS file.** After part 4, the links sat in odd places in Chrome, and "(opens in a new tab)", meant only for screen readers, was visible. The server was sending the new CSS, but it doesn't tell browsers how long to keep files, and the CSS's address never changed. So Chrome kept using the copy it had saved before part 4, which didn't have the new rules. That's the problem noted in piece 1b. The CSS link now carries a fingerprint of the file (like `app.css?v=9c5b2e95`): every rebuild changes the link, so the browser fetches the new file, and while the CSS stays the same, the browser can keep its copy.
+
+**Piece 1e, part 5: Claude Desktop gets the same to-do list**
+- **Decided:**
+  - **`list_todos` uses the recipe from `todos.py`,** so Claude Desktop sees exactly what the page shows: one entry per conversation, with no 14-day limit. Before, it saw 11 entries from 8 conversations, missed 18 of the page's 26, and asked Gmail about each email separately, for 240 quota units per call instead of 5.
+  - **A new Gmail connection for every tool call,** like the page. That fixes the server holding on to an expired login (found while planning 1e): signing in again, with the page's button for example, now works for Claude Desktop straight away. The lock is gone, because tool calls no longer share anything.
+  - **When Gmail can't be asked, Claude gets a clear message and no list,** rather than the log's list with a warning. Then it can't act on a to-do I've already dealt with, like offering to draft a reply to it.
+  - **Each to-do comes with the same "Open in Gmail" link as the page,** so Claude can hand me a link that opens my main account. `gmail_link()` moved to `gmail_client.py`, so the page and the server share it.
+  - The message about an expired login now points to the page's "Sign in to Gmail" button first, and to the terminal command as a way out.
+- **Built:**
+  - `list_todos` in `gmail_mcp_server.py`: one question to Gmail for the inbox list, the flagged emails from the log, and the recipe. Each to-do has the page's fields, its date in full (like `2026-10-25T15:52`) and its Gmail link.
+  - `gmail()` makes a new connection for every tool call, and the lock is gone.
+  - `recent_todos()` is gone from `database.py`, and `check_mcp_server.py` calls the new `list_todos`.
+- **Learned:**
+  - An MCP tool's inputs come from its Python parameters: removing `days` removed the setting from what Claude sees.
+  - The MCP server runs for as long as Claude Desktop does, so code changes only reach Claude after quitting and reopening the app.
+- **Result:**
+  - 12 tests passed. Through MCP, the way Claude Desktop uses the server: `list_todos` takes no settings, says it's the page's list, is still read-only, and returns the same 26 conversations as the page, in the same order, with the same fields and Gmail links and all 60 flagged emails; two tool calls at the same moment both work. With patches: an expired login gives Claude the sign-in message and no list, the next call after signing in again works without restarting the server, and no internet or a problem at Google gives a clear message.
+  - `check_mcp_server.py` lists the 4 tools and gets 26 conversations from `list_todos`. The draft tool was never called, so nothing in Gmail changed.
+  - The page's 8 link tests still pass.
+  - **The real thing:** after restarting Claude Desktop, I asked it "what's on my to-do list?". The tool gave Claude the same 26 conversations as the page, and Claude's answer covered all of them, grouped by urgency and topic into 17 bullets (the four Dropbox Sign reminders for one contract became one, for example). For a booking, it suggested using the airline's site rather than the link in the email.
+- **Found:**
+  - Claude's answer said "24 items" while listing all 26: a counting slip by the model while summarizing. The numbers to trust come from code, like the page's count.
+  - Claude pointed out to-dos that are probably done or out of date: an expired one-time code, an old check-in and a past event. They stay on the list until I archive them in Gmail. Piece 2's deadlines and a "Done" button (in What's left) are where that gets better.
 
 ## What's left
 
@@ -602,12 +650,12 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 - [x] **Step 7, piece 1b:** Tailwind's standalone program, styling the page
 - [x] **Step 7, piece 1c:** the layout: menu bar and "Sort new emails" button
 - [x] **Step 7, piece 1d:** my to-dos from the database
-- [ ] **Step 7, piece 1e:** only the to-dos still in my inbox, in five parts:
+- [x] **Step 7, piece 1e:** only the to-dos still in my inbox, in five parts:
   - [x] part 1: a new Gmail connection for every page load, and a notice when Gmail can't be checked
   - [x] part 2: a "Sign in to Gmail" button on the page, which only accepts my own account
   - [x] part 3: the inbox check, in a shared `todos.py`
-  - [ ] part 4: an "Open in Gmail" link that names my account
-  - [ ] part 5: Claude Desktop's `list_todos` uses the same list and connects fresh for every tool call
+  - [x] part 4: an "Open in Gmail" link that names my account
+  - [x] part 5: Claude Desktop's `list_todos` uses the same list and connects fresh for every tool call
 - [ ] **Step 7, piece 1f:** a home page: what needs me, Unsorted emails, replies waiting to be sent, and what the agent did lately
 - [ ] **Step 7, piece 2:** the full-read step (Haiku, with Sonnet for unsure cases) and urgency
 - [ ] **Step 7, piece 3:** the "Sort new emails" button, with a summary of what arrived and what needs me
@@ -637,7 +685,7 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 | `label_designer.py` | Step 4: Claude Opus suggests a label set from my inbox and existing labels |
 | `labels.example.json` | A shareable example label set. My real labels are in `labels.json`, which isn't in Git |
 | `database.py` | The agent's memory: a SQLite log of every email it handled and what it decided |
-| `todos.py` | Step 7: what counts as a to-do, in one place. `list_todos()` combines the agent's flagged emails with Gmail's list of what's in my inbox. Used by the web page, and soon by the MCP server |
+| `todos.py` | Step 7: what counts as a to-do, in one place. `list_todos()` combines the agent's flagged emails with Gmail's list of what's in my inbox. Used by the web page and the MCP server |
 | `undo.py` | Reverses the last run (`triage.py --apply` or `backlog.py apply`): removes the labels it added and moves archived emails back into the inbox |
 | `backlog.py` | Sorts the whole inbox backlog with Claude's Message Batches API: `sample`, `submit`, `wait`, `apply` |
 | `gmail_mcp_server.py` | My Gmail MCP server: search, read threads, list to-dos, save reply drafts. No send, delete or archive |

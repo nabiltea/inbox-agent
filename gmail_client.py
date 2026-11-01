@@ -21,6 +21,7 @@ from datetime import datetime
 from email.message import EmailMessage
 from email.utils import formataddr, getaddresses, parseaddr
 from pathlib import Path
+from urllib.parse import urlencode
 
 from google.auth.exceptions import RefreshError, TransportError
 from google.auth.transport.requests import Request
@@ -78,7 +79,10 @@ class WrongAccountError(SignInFailedError):
 
 
 # The messages that go with the first three errors, wherever they're raised.
-_LOGIN_EXPIRED = "The Gmail login has expired. Run 'python show_inbox.py' once to sign in again."
+_LOGIN_EXPIRED = (
+    "The Gmail login has expired. Sign in again with the 'Sign in to Gmail' button on the web page, "
+    r"or run .venv\Scripts\python show_inbox.py in the project folder."
+)
 _CANT_REACH_GOOGLE = "Couldn't reach Google. Check the internet connection."
 _GOOGLE_TEMPORARY = "Google has a temporary problem on its side. Try again in a few minutes."
 
@@ -343,6 +347,19 @@ def get_my_address(service):
     return service.users().getProfile(userId="me").execute()["emailAddress"]
 
 
+def gmail_link(thread_id, address):
+    """A link that opens a conversation on Gmail's website, in my account.
+
+    Used by the web page and the MCP server. authuser picks which of the accounts
+    signed in to the browser Gmail uses: without it, Gmail opens the browser's default
+    account, which on my PC isn't this one. The part after "#" never goes to Google's
+    server: Gmail's page reads it in the browser and opens the conversation, and
+    "inbox" makes Back go to the inbox. Google doesn't document these links, so they
+    were tested by clicking one.
+    """
+    return f"https://mail.google.com/mail/?{urlencode({'authuser': address})}#inbox/{thread_id}"
+
+
 def get_thread(service, thread_id, max_chars_per_message=4000):
     """Return a whole conversation: its subject, and each message's sender, recipients, date and text.
 
@@ -503,7 +520,7 @@ def _save_login(creds):
         raise SignInFailedError(
             "Signed in, but Gmail couldn't say which account it was, so nothing was saved. Try again in a minute."
         ) from error
-    expected = _saved_account()
+    expected = saved_account()
     if expected and address.lower() != expected.lower():
         raise WrongAccountError(
             f"You signed in as {address}, but this app is set up for {expected}, so nothing was saved. "
@@ -514,8 +531,12 @@ def _save_login(creds):
     return creds
 
 
-def _saved_account():
-    """The Gmail address the saved login belongs to, or None if there's no login or it doesn't say."""
+def saved_account():
+    """The Gmail address the saved login belongs to, or None if there's no login or it doesn't say.
+
+    Signing in records it in token.json, straight from Gmail (see _save_login), so
+    reading it here costs no request to Gmail and works even when Gmail can't be reached.
+    """
     if not TOKEN_FILE.exists():
         return None
     return Credentials.from_authorized_user_file(TOKEN_FILE).account or None
@@ -523,7 +544,7 @@ def _saved_account():
 
 def _account_hint():
     """Tells Google's sign-in page which account to select: the one the saved login belongs to."""
-    account = _saved_account()
+    account = saved_account()
     return {"login_hint": account} if account else {}
 
 

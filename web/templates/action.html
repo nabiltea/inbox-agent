@@ -21,7 +21,8 @@
        says; the page only decides how the date looks (show_date in app.py). #}
     <ul class="mt-4 divide-y divide-gray-200 rounded-lg bg-white shadow-sm">
       {% for todo in todos %}
-        <li class="flex items-start gap-4 px-5 py-4">
+        {# flex-wrap lets the Gmail link take a line of its own, under the rest of the row #}
+        <li class="flex flex-wrap items-start gap-x-4 gap-y-1 px-5 py-4">
           {# The tags. Each class name is written out in full, because Tailwind can't see names built from pieces. #}
           <div class="flex w-16 shrink-0 flex-col items-start gap-1">
             {% if todo.needs_action %}
@@ -31,7 +32,7 @@
               <span class="rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800">Reply</span>
             {% endif %}
           </div>
-          <div class="min-w-0">
+          <div class="min-w-0 flex-1">
             <p class="font-medium">{{ todo.what_to_do }}</p>
             <p class="mt-0.5 text-sm text-gray-500">
               {{ todo.sender }} · {{ todo.subject }} · {{ todo.received|show_date }} · {{ todo.label }}
@@ -40,6 +41,19 @@
               {% endif %}
             </p>
           </div>
+          {# Opens the conversation in Gmail, in a new tab. noopener noreferrer: Gmail gets no
+             hold on this tab and isn't told which page the click came from. Screen readers
+             skip the arrow and read "(opens in a new tab)" instead. Without a known account
+             there's no link, rather than one that opens the wrong account.
+             w-full gives the link a line of its own, starting at the row's left edge. #}
+          {% if gmail_address %}
+            <div class="w-full">
+              <a href="{{ gmail_link(todo.thread_id, gmail_address) }}" target="_blank" rel="noopener noreferrer"
+                 class="text-sm text-blue-600 hover:underline">
+                Open in Gmail<span aria-hidden="true"> ↗</span><span class="sr-only"> (opens in a new tab)</span>
+              </a>
+            </div>
+          {% endif %}
         </li>
       {% endfor %}
     </ul>

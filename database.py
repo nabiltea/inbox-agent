@@ -83,21 +83,12 @@ def save_decision(conn, run_id, email, result, label_added, archived, model, cos
     conn.commit()  # save to the file now, so a crash halfway through a run loses nothing
 
 
-def recent_todos(conn, since):
-    """Emails received since the given date that were flagged as needing a reply or an action, newest first."""
-    return conn.execute("""
-        SELECT * FROM decisions
-        WHERE (needs_reply = 1 OR needs_action = 1) AND received_at >= ?
-        ORDER BY received_at DESC
-    """, (since.isoformat(),)).fetchall()
-
-
 def flagged_emails(conn):
     """Emails flagged as needing a reply or an action that the agent left in the inbox, newest first.
 
-    Unlike recent_todos, there's no time limit: a flagged email that's still in the inbox
-    is still a to-do, however old it is. This only knows what the agent did, so an email
-    I've archived myself since is still included. todos.py leaves those out.
+    There's no time limit: a flagged email that's still in the inbox is still a to-do,
+    however old it is. This only knows what the agent did, so an email I've archived
+    myself since is still included. todos.py leaves those out.
     """
     return conn.execute("""
         SELECT * FROM decisions
