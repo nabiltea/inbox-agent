@@ -1,11 +1,40 @@
-{# The Unsorted page, a placeholder until piece 4 #}
+{# The Unsorted page: the emails that fit no label, each with the label it suggests. For now it
+   only lists them. It fills the slots in base.html, which draws the rest. #}
 {% extends "base.html" %}
 
 {% block title %}Unsorted · {% endblock %}
 
+{# Added to the Gmail notice in base.html when Gmail couldn't be checked #}
+{% block gmail_problem_note %}
+  <p class="mt-1 text-sm">Until then, an email you've archived yourself may still show as in your inbox.</p>
+{% endblock %}
+
 {% block content %}
-  <h1 class="text-2xl font-semibold">Unsorted</h1>
-  <div class="mt-4 rounded-lg bg-white p-6 shadow-sm">
-    <p class="text-gray-600">Coming in piece 4: emails that fit no label, with the label each one suggests.</p>
+  {% set total = in_inbox|length + older|length %}
+  <div class="flex items-baseline gap-3">
+    <h1 class="text-2xl font-semibold">Unsorted</h1>
+    {% if total %}
+      <span class="text-sm text-gray-600">{{ total }} {{ "email" if total == 1 else "emails" }} waiting for a label</span>
+    {% endif %}
   </div>
+
+  {% if total %}
+    {# Two groups with the same rows, and a group with no emails isn't drawn. show_flags: "Needs you"
+       only means something in the inbox. An older email was flagged long ago and has been archived
+       since, so it isn't a to-do any more. #}
+    {% for title, emails, show_flags in [("In your inbox", in_inbox, true), ("Older, already archived", older, false)] %}
+      {% if emails %}
+        <h2 class="mt-6 font-medium">{{ title }}</h2>
+        <ul class="mt-2 divide-y divide-gray-200 rounded-lg bg-white shadow-sm">
+          {% for email in emails %}
+            {% include "_unsorted_row.html" %}
+          {% endfor %}
+        </ul>
+      {% endif %}
+    {% endfor %}
+  {% else %}
+    <div class="mt-4 rounded-lg bg-white p-6 shadow-sm">
+      <p class="text-gray-600">Nothing is waiting for a label.</p>
+    </div>
+  {% endif %}
 {% endblock %}

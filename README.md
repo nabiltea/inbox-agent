@@ -862,6 +862,44 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - **I haven't pressed the real button on my real inbox,** on purpose. That waits for the History page, so the real Gmail changes behind the button have only been tested with stand-ins. The same Gmail code did run for real in Steps 4 and 5.
   - **A normal day should take about 25 seconds to sort,** at about 10 emails a day. That's short enough that I don't need to read emails at the same time, which would add complexity and risk hitting rate limits.
 
+**Piece 4: the Unsorted page**
+- **Checked first, read-only:**
+  - **The 45 Unsorted emails in the log are all archived,** in the log and in Gmail, because each was older than 30 days when the backlog was sorted. All 45 still exist in Gmail under Unsorted.
+  - **New ones will be rare:** about 1 in 150 overall, and none in my last normal run of 99 emails. At about 10 emails a day, that's one every two weeks at most, so this page is mostly a one-time clean-up.
+  - **18 of the 45 are about one theme, worded 9 different ways,** because Claude sees each email alone. Another 12 are bounce notices or blank emails, where no label helps.
+  - **A running server wouldn't notice a new label.** `triage.py` reads `labels.json` once, and `--reload` only watches `.py` files. Those emails would keep landing in Unsorted, with no warning.
+  - **`undo.py` trusts the log.** It removes whichever label the log names, so if the log still said Unsorted after a change, undo would leave the new label on the email.
+- **Decided:**
+  - **Both kinds of email on one page,** in two groups: those in my inbox first, then the older ones, with the same rows. Step 4h decided to make choosing a label by hand easy, so the 45 belong here too.
+  - **Reject means "no label needed, stop asking".** The email stays under Unsorted in Gmail and leaves the page. If Reject only removed the suggestion, the bounce notices and blank emails could never leave.
+  - **After my choice, an inbox email follows the same rule as sorting:** it leaves the inbox unless it needs me, however old it is. The 30-day rule is only for first-time sorting. An older email stays archived.
+  - **A change is recorded as a current value plus a history,** like a bank balance and its statement. `decisions.label` always holds the label now, so `undo.py` and the pages stay right. A new table, `label_changes`, gets one row per change, with the label before and after. Only overwriting the label would lose Claude's answer and what I changed, and never changing `decisions` would make everything look in two places. Step 8's accuracy tests can use this too, because Claude's answer next to mine is an answer key.
+  - **No Undo button on this page.** I won't use the web page until the History page is up, so undo arrives there, in piece 5. The log records everything it will need.
+  - **Undoing a whole run reverses my hand changes too,** so everything goes back to how it was before that run, and `undo.py` needs no change. I can revisit this in piece 5, when History can warn me first.
+  - **New labels stay in `labels.json`,** saved by writing a temporary file and swapping it in with one move, so a crash can't leave half a file. A company with many users would use a database table, but a file is normal for one person's tool, and I can still edit it by hand.
+  - **The labels get read at the start of every run,** like a recipe card you read as you start cooking: change the card and the next meal uses it, while the one on the stove carries on. Asking me to restart the server would also stop a sort in progress, and overwriting shared variables could leave a running sort with instructions and allowed answers that disagree.
+  - **A new label gets checked before it's saved.** Claude writes a suggestion after reading an outside email, and once approved, it joins the instructions for every future email ("stored prompt injection"). So invisible characters come out, it has to fit on one line within a length limit, and what I see is exactly what gets saved.
+  - **Only the changed row updates, with HTMX,** so I keep my place in a long list. A new label reloads the page, so every row's dropdown has it.
+  - **No preview of each email.** The log doesn't have one, and asking Gmail about every row on each page load isn't practical (see Found below). Open in Gmail is there instead.
+  - **Smaller choices:** one row per email, since only one conversation has two Unsorted emails. A dropdown plus a Move button, so a slip can't change Gmail. Approving moves only that email. A new label counts as non-routine, so its emails get a full read. No selecting many at once, given how few emails arrive after the clean-up.
+- **Built, part 1: the list, read-only:**
+  - `unsorted_emails()` in `database.py`: the emails labelled Unsorted, newest first, with whether each one needs me, by the same rule as the to-do list.
+  - `unsorted()` in `web/app.py`: asks Gmail once what's in my inbox, gets the emails from the log and splits them into the two groups. When Gmail can't be asked, the log's record of what the agent last did decides, and the page's notice says so.
+  - `unsorted.html` draws the groups, and `_unsorted_row.html` one email: subject, sender, date, Claude's reason, the suggestion in full and Open in Gmail. A row is a template of its own, so the buttons coming next can replace one row by itself.
+  - `_macros.html`: the coloured tag and the Gmail link moved out of `action.html`, so both pages share them.
+- **Learned:**
+  - When moving code shouldn't change anything, compare before and after (a "regression test"). I drew Action needed with the committed templates and the new ones, on the same data, and compared the results.
+  - A template's escaping isn't the same as Python's `html.escape`: an apostrophe becomes `&#39;` instead of `&#x27;`. Four of my checks first failed on apostrophes, and the page was right. A failing test can be the test's fault, so it pays to find out which before changing anything.
+- **Result:**
+  - **66 free tests, on a copy of my real log with stand-ins for Gmail:** all 45 are listed newest first, with descriptions and reasons in full. "Needs you" only shows in the inbox group, and the full read has the last word on it. Gmail gets asked once per page load.
+  - When the login has ended, Google can't be reached, or Google has a problem, the page keeps its list and shows the right notice. Text trying to be code shows as plain text in all five places it can appear. An email with no suggestion doesn't say "None", and with no known account there's no link.
+  - Action needed came out the same with the old and new templates, on 28 rows, apart from spaces and the secret code.
+  - **In a real browser, with made-up emails:** the layout works at desktop and phone width, the page is no wider than a phone, nothing loads from outside, and the console shows no errors.
+  - My real log, `labels.json` and `token.json` stayed byte-for-byte the same.
+- **Found:**
+  - **Gmail refused part of a request for 45 emails at once, at email 37.** `get_emails()` waited a minute and then finished fine. It's harmless, but the Sort button fetches the same way, so with more than about 37 new emails it may sit on "Looking for new emails…" for a minute.
+  - **Open in Gmail hasn't been tried on an archived email.** The link says `#inbox`, and Google doesn't document these links. I'll click one when the History page is up.
+
 ## What's left
 
 - [x] **Step 1:** First call to Claude
@@ -906,8 +944,14 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - [x] part 3: urgency, shown on the page, to Claude Desktop and on the home page
   - [x] part 4: triage runs the full read for new emails, before deciding what to archive
 - [x] **Step 7, piece 3:** the "Sort new emails" button, with a summary of what arrived and what needs me, and protection against other websites pressing the app's buttons
-- [ ] **Step 7, piece 4:** the Unsorted page: approve, edit or reject label suggestions, or pick a label by hand
-- [ ] **Step 7, piece 5:** the History page: past runs, how many emails went to each label, undo, and a "Needs action" button
+- [ ] **Step 7, piece 4:** the Unsorted page: approve, edit or reject label suggestions, or pick a label by hand, in five parts:
+  - [x] part 1: the list of emails waiting for a label, read-only
+  - [ ] part 2: move an email to a label I already have, recorded in the log
+  - [ ] part 3: reject a suggestion
+  - [ ] part 4: read the labels at the start of each run, so a new label works without a restart
+  - [ ] part 5: approve or edit a suggestion, which adds the new label to Gmail and `labels.json`
+- [ ] **Step 7, piece 5:** the History page: past runs, how many emails went to each label, undo (whole runs and my own label changes), and a "Needs action" button
+- [ ] Once the History page is up, the real checks of the Unsorted page: move one real email, add one real label, and click Open in Gmail on an archived email
 - [ ] **Step 7, piece 6:** the draft flow: "Draft reply" with a hints box, the Critic's verdict, and saving to Gmail drafts, also when the Critic isn't satisfied
 - [ ] An archive button for to-dos on the page, so I can clear the overdue ones there instead of in Gmail. A row can hold several conversations, so one click should archive them all. It's protected like every other button, by the protection against other websites that piece 3 added
 - [ ] A double-click shortcut that starts the web page, so opening it doesn't need VS Code

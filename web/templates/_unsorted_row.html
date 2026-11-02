@@ -1,0 +1,23 @@
+{# One email on the Unsorted page: what it is, why it fits no label, and the label it suggests.
+   A template of its own, because the buttons coming next will replace one row by itself with
+   HTMX, the way _sort_status.html gets replaced. The suggestion is written out in full, because
+   it's what I'd be approving. Everything here is escaped, as on every page (see app.py). #}
+{% from "_macros.html" import open_in_gmail, tag %}
+<li class="px-5 py-4">
+  <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+    <p class="min-w-0 font-medium">{{ email.subject }}</p>
+    {% if show_flags and email.needs_me %}{{ tag("Needs you", "bg-amber-100 text-amber-800") }}{% endif %}
+  </div>
+  <p class="mt-0.5 text-sm text-gray-500">{{ email.sender }} · {{ email.received_at|show_logged_date }}</p>
+  <p class="mt-1 text-sm text-gray-600">Why: {{ email.reason }}</p>
+  {% if email.suggested_label %}
+    <div class="mt-2 border-l-2 border-gray-200 pl-3 text-sm">
+      <p>Suggested new label: <span class="font-medium">{{ email.suggested_label }}</span></p>
+      <p class="mt-0.5 text-gray-600">{{ email.suggested_description }}</p>
+    </div>
+  {% endif %}
+  {# Without a known account there's no link, rather than one that opens the wrong account. #}
+  {% if gmail_address %}
+    <div class="mt-2">{{ open_in_gmail(email.thread_id, gmail_address) }}</div>
+  {% endif %}
+</li>

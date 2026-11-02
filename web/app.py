@@ -4,7 +4,8 @@ A FastAPI app that runs on my own computer. Each address, like "/", is a Python
 function, and each page is an HTML template in web/templates/ that the function
 fills in. There are three pages, Action needed, Unsorted and History, which share
 one layout with the menu and the "Sort new emails" button (web/templates/base.html).
-Action needed lists my to-dos. The other two say which piece they arrive in.
+Action needed lists my to-dos, and Unsorted the emails that fit no label. History says
+which piece it arrives in.
 
 Start it from the project folder with:
   python -m uvicorn web.app:app --reload
@@ -119,6 +120,11 @@ def show_date(date):
     return text if date.year == datetime.now().year else f"{text} {date.year}"
 
 
+def show_logged_date(text):
+    """The same as show_date(), for a date straight from the log, where dates are saved as text."""
+    return show_date(datetime.fromisoformat(text))
+
+
 def show_deadline(deadline):
     """A deadline in words: "Due today", "Due tomorrow", "Due Tue 10 Nov" or "Was due Fri 6 Nov"."""
     days_left = (deadline - date.today()).days
@@ -133,6 +139,7 @@ def show_deadline(deadline):
 
 # Lets the templates use these as "filters": {{ todo.received|show_date }}
 templates.env.filters["show_date"] = show_date
+templates.env.filters["show_logged_date"] = show_logged_date
 templates.env.filters["show_deadline"] = show_deadline
 
 
@@ -236,8 +243,28 @@ def action_needed(request: Request):
 
 @app.get("/unsorted")
 def unsorted(request: Request):
-    """Unsorted: emails that fit no label, with their suggested labels. A placeholder until piece 4."""
-    return templates.TemplateResponse(request=request, name="unsorted.html", context={"active": "unsorted"})
+    """Unsorted: the emails that fit no label, with the label each one suggests, those in my inbox first."""
+    inbox_ids, gmail_problem = check_inbox()
+    with closing(database.connect()) as conn:
+        emails = database.unsorted_emails(conn)
+
+    def in_my_inbox(email):
+        # Gmail knows what's in my inbox right now. When it can't be asked, the log says what the agent last did.
+        return not email["archived"] if inbox_ids is None else email["message_id"] in inbox_ids
+
+    return templates.TemplateResponse(
+        request=request,
+        name="unsorted.html",
+        context={
+            "active": "unsorted",
+            "in_inbox": [email for email in emails if in_my_inbox(email)],
+            "older": [email for email in emails if not in_my_inbox(email)],
+            # For the "Open in Gmail" links, the same as on Action needed
+            "gmail_address": saved_account(),
+            "gmail_problem": gmail_problem,  # None, or why Gmail couldn't be checked
+            "message": _waiting.pop("message", None),  # shown once, after signing in
+        },
+    )
 
 
 @app.get("/history")

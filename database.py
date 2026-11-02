@@ -213,6 +213,19 @@ def unsorted_count(conn):
     return conn.execute("SELECT COUNT(*) FROM decisions WHERE label = 'Unsorted'").fetchone()[0]
 
 
+def unsorted_emails(conn):
+    """The emails that fit no label, newest first, each with whether it needs me (needs_me).
+
+    The same rule as flagged_emails(): the full read has the last word, and without one, triage's first look.
+    """
+    return conn.execute("""
+        SELECT decisions.*, COALESCE(f.needs_me = 'yes', decisions.needs_reply = 1 OR decisions.needs_action = 1) AS needs_me
+        FROM decisions LEFT JOIN full_reads AS f ON f.message_id = decisions.message_id
+        WHERE decisions.label = 'Unsorted'
+        ORDER BY decisions.received_at DESC
+    """).fetchall()
+
+
 def sorting_costs(conn, since):
     """What sorting has cost in dollars, and for how many emails: since the given date, and in total.
 

@@ -1,0 +1,18 @@
+{# Small pieces of template that more than one page uses. A macro is a reusable piece of
+   template, like a function. A page gets them with {% from "_macros.html" import ... %}. #}
+
+{# A small coloured tag. The colours are passed in as full class names, because Tailwind can't
+   see names built from pieces. #}
+{% macro tag(text, colours) %}
+  <span class="whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium {{ colours }}">{{ text }}</span>
+{% endmacro %}
+
+{# Opens a conversation in Gmail, in a new tab. noopener noreferrer: Gmail gets no hold on
+   this tab and isn't told which page the click came from. Screen readers skip the arrow
+   and read "(opens in a new tab)" instead. #}
+{% macro open_in_gmail(thread_id, address) %}
+  <a href="{{ gmail_link(thread_id, address) }}" target="_blank" rel="noopener noreferrer"
+     class="whitespace-nowrap text-sm text-blue-600 hover:underline">
+    Open in Gmail<span aria-hidden="true"> ↗</span><span class="sr-only"> (opens in a new tab)</span>
+  </a>
+{% endmacro %}
