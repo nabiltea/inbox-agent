@@ -1,5 +1,5 @@
 {# One email on the Unsorted page: what it is, why it fits no label, the label it suggests, and
-   a way to move it. The suggestion is written out in full, because it's what I'd be approving.
+   what I can do about it. The suggestion is written out in full, because it's what I'd be approving.
    Everything here is escaped, as on every page (see app.py). #}
 {% from "_macros.html" import open_in_gmail, tag %}
 <li class="px-5 py-4">
@@ -16,24 +16,29 @@
     </div>
   {% endif %}
   <div class="mt-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-    {# hx-post sends the form to the server, and hx-target says the answer replaces this whole row.
-       hx-disabled-elt greys out the button straight away, so a double click can't send two requests.
-       required makes the browser refuse to send the form until a label is chosen. #}
-    <form hx-post="{{ url_for('move_email', message_id=email.message_id).path }}" hx-target="closest li" hx-swap="outerHTML" hx-disabled-elt="find button"
-          class="flex flex-wrap items-center gap-2">
-      <label class="flex flex-wrap items-center gap-2 text-sm text-gray-600">
-        Move to
-        <select name="label" required class="rounded-md border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900">
-          <option value="">Choose a label…</option>
-          {% for label in labels %}
-            <option>{{ label }}</option>
-          {% endfor %}
-        </select>
-      </label>
-      <button type="submit" class="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-800 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50">
-        Move
+    {# hx-post sends the click or the form to the server, and hx-target says the answer replaces this
+       whole row. hx-disabled-elt greys out the button straight away, so a double click can't send two
+       requests. required makes the browser refuse to send the form until a label is chosen. #}
+    {% set button_style = "rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-800 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50" %}
+    <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
+      <button type="button" hx-post="{{ url_for('reject_suggestion', message_id=email.message_id).path }}" hx-target="closest li" hx-swap="outerHTML" hx-disabled-elt="this"
+              class="{{ button_style }}">
+        {{ "Reject" if email.suggested_label else "No label needed" }}
       </button>
-    </form>
+      <form hx-post="{{ url_for('move_email', message_id=email.message_id).path }}" hx-target="closest li" hx-swap="outerHTML" hx-disabled-elt="find button"
+            class="flex flex-wrap items-center gap-2">
+        <label class="flex flex-wrap items-center gap-2 text-sm text-gray-600">
+          or move to
+          <select name="label" required class="rounded-md border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900">
+            <option value="">Choose a label…</option>
+            {% for label in labels %}
+              <option>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <button type="submit" class="{{ button_style }}">Move</button>
+      </form>
+    </div>
     {# Without a known account there's no link, rather than one that opens the wrong account. #}
     {% if gmail_address %}
       {{ open_in_gmail(email.thread_id, gmail_address) }}

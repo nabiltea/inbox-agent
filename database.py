@@ -82,8 +82,9 @@ def connect():
     # decisions always holds the label now, the balance, so everything that reads it
     # stays right, and this table is the statement, with one row per change. That also
     # keeps Claude's first answer, which the accuracy tests in Step 8 can compare with mine.
-    # action says what I did, like "picked". The last three columns are what undoing one
-    # change will need: whether the agent had added the old label, whether this change
+    # action says what I did: "picked" a label, or "rejected" the suggestion, which keeps
+    # the email under Unsorted. The last three columns are what undoing one change will
+    # need: whether the agent had added the old label, whether this change
     # added the new one (not if the email already had it), and whether it took the email
     # out of the inbox. ON DELETE CASCADE works as it does for full_reads above.
     conn.execute("""
@@ -230,27 +231,37 @@ def last_run_summary(conn):
     """).fetchone()
 
 
+# Which emails wait for me to decide about their label: those that fit no label, which triage
+# labels "Unsorted" (UNSORTED in triage.py), unless I've said none is needed. Whether I have is
+# only kept in label_changes, not in a second place in decisions, so the two can't disagree.
+_WAITING_FOR_LABEL = """
+    decisions.label = 'Unsorted' AND NOT EXISTS (
+        SELECT 1 FROM label_changes AS c WHERE c.message_id = decisions.message_id AND c.action = 'rejected'
+    )
+"""
+
+
 def unsorted_count(conn):
-    """How many emails fit no label. Triage labels those "Unsorted" (UNSORTED in triage.py)."""
-    return conn.execute("SELECT COUNT(*) FROM decisions WHERE label = 'Unsorted'").fetchone()[0]
+    """How many emails are waiting for me to decide about their label."""
+    return conn.execute(f"SELECT COUNT(*) FROM decisions WHERE {_WAITING_FOR_LABEL}").fetchone()[0]
 
 
-# The emails that fit no label, each with whether it needs me (needs_me). The same rule as
+# The emails waiting for a label, each with whether it needs me (needs_me). The same rule as
 # flagged_emails(): the full read has the last word, and without one, triage's first look.
-_UNSORTED_EMAILS = """
+_UNSORTED_EMAILS = f"""
     SELECT decisions.*, COALESCE(f.needs_me = 'yes', decisions.needs_reply = 1 OR decisions.needs_action = 1) AS needs_me
     FROM decisions LEFT JOIN full_reads AS f ON f.message_id = decisions.message_id
-    WHERE decisions.label = 'Unsorted'
+    WHERE {_WAITING_FOR_LABEL}
 """
 
 
 def unsorted_emails(conn):
-    """The emails that fit no label, newest first, each with whether it needs me."""
+    """The emails waiting for a label, newest first, each with whether it needs me."""
     return conn.execute(f"{_UNSORTED_EMAILS} ORDER BY decisions.received_at DESC").fetchall()
 
 
 def unsorted_email(conn, message_id):
-    """One email that fits no label, with whether it needs me. None if the log has no such email."""
+    """One email waiting for a label, with whether it needs me. None if it isn't waiting, or the log doesn't know it."""
     return conn.execute(f"{_UNSORTED_EMAILS} AND decisions.message_id = ?", (message_id,)).fetchone()
 
 
@@ -260,6 +271,7 @@ def save_label_change(conn, message_id, action, label, label_added, left_inbox):
     label_added is False when the email already had that label. left_inbox is True when this
     change took the email out of the inbox, which also counts as archived, so undoing its run
     brings it back. One commit saves both (a "transaction"), so a crash can't save only one.
+    Rejecting a suggestion goes the same way, with the label staying the same.
     """
     old = conn.execute("SELECT label, label_added FROM decisions WHERE message_id = ?", (message_id,)).fetchone()
     conn.execute(

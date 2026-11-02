@@ -5,7 +5,7 @@ function, and each page is an HTML template in web/templates/ that the function
 fills in. There are three pages, Action needed, Unsorted and History, which share
 one layout with the menu and the "Sort new emails" button (web/templates/base.html).
 Action needed lists my to-dos, and Unsorted the emails that fit no label, which I can
-move to one of my labels. History says which piece it arrives in.
+move to one of my labels or say need none. History says which piece it arrives in.
 
 Start it from the project folder with:
   python -m uvicorn web.app:app --reload
@@ -274,13 +274,24 @@ def unsorted(request: Request):
     )
 
 
-# The Move button on a row of the Unsorted page. The answer normally replaces the row
+# The buttons on a row of the Unsorted page. The answer normally replaces the row
 # (see _unsorted_row.html).
 @app.post("/unsorted/{message_id}/move")
 def move_email(request: Request, message_id: str, label: Annotated[str, Form()] = ""):
     """Move an Unsorted email to a label I already have, and show how it went in its row."""
+    return change_row(request, message_id, lambda: labelling.move_to_label(message_id, label))
+
+
+@app.post("/unsorted/{message_id}/reject")
+def reject_suggestion(request: Request, message_id: str):
+    """Say that an Unsorted email needs no label, and show how it went in its row."""
+    return change_row(request, message_id, lambda: labelling.reject_suggestion(message_id))
+
+
+def change_row(request, message_id, change):
+    """Carry out a button's change to one email, and answer with what its row should say."""
     try:
-        moved = labelling.move_to_label(message_id, label)
+        changed = change()
     except SignInNeededError:
         # A row has no room for the sign-in button, so the page reloads and shows its notice.
         return Response(headers={"HX-Refresh": "true"})
@@ -289,12 +300,12 @@ def move_email(request: Request, message_id: str, label: Annotated[str, Form()] 
     except EmailGoneError as error:
         return row_problem(request, message_id, f"Not moved: {error}")
     except Exception as error:
-        log.exception("Couldn't finish moving an email")
-        return row_problem(request, message_id, f"Couldn't finish moving this email: {sorting.explain(error)}")
+        log.exception("Couldn't finish changing an email")
+        return row_problem(request, message_id, f"Couldn't finish: {sorting.explain(error)}")
     with closing(database.connect()) as conn:
         total = database.unsorted_count(conn)
     return templates.TemplateResponse(
-        request=request, name="_unsorted_moved.html", context={"moved": moved, "total": total}
+        request=request, name="_unsorted_changed.html", context={"changed": changed, "total": total}
     )
 
 

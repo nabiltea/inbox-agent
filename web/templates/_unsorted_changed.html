@@ -1,0 +1,13 @@
+{# What a row of the Unsorted page turns into after a button, until the page is next loaded. The
+   answer also carries the count from the top of the page, so that gets updated too ("out of band"). #}
+<li class="px-5 py-4 text-sm text-gray-600" role="status">
+  {% if changed %}
+    <p class="font-medium text-gray-900">{{ changed.subject }}</p>
+    <p class="mt-0.5">
+      {% if changed.label %}Moved to {{ changed.label }}{% else %}Rejected: no label needed, so it won't be listed here again{% endif %}{% if changed.left_inbox %}, and it left your inbox{% elif changed.still_needs_me %}. It stays in your inbox because it needs you{% endif %}.
+    </p>
+  {% else %}
+    <p>This email isn't waiting for a label any more.</p>
+  {% endif %}
+</li>
+{% with oob = true %}{% include "_unsorted_count.html" %}{% endwith %}
