@@ -898,6 +898,10 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - `reject_suggestion()` in `web/labelling.py`: the email stays under Unsorted in Gmail, and `label_changes` gets a "rejected" row, with Unsorted before and after. It still asks Gmail whether the email is in my inbox, because it leaves on the same rule as a move. An email that isn't in Gmail any more has nothing to change there, so the answer just gets recorded, which is also the way to clear such an email off the list.
   - `_WAITING_FOR_LABEL` in `database.py`: "waiting for a label" now means Unsorted and not rejected, written once and used by the list, the lookup behind the buttons and the home page's count. Whether I've rejected an email is only kept in `label_changes`, not copied into `decisions`, so the two can't disagree ("normalization", the same reason `full_reads` has its own table).
   - Each row has a Reject button, then "or move to". An email with no suggestion has "No label needed" on the button instead. Both buttons go through `change_row()` in `web/app.py`, so they deal with Gmail's problems in the same way.
+- **Built, part 4: reading the labels at the start of each run:**
+  - `SortingRules` and `read_sorting_rules()` in `triage.py`: what one run sorts by, made from `labels.json` when it starts, namely the labels, Claude's instructions and the allowed answers. The run hands them down to each email, so a run that's already going keeps its own.
+  - The Sort button reads them on each press, and `triage.py` and `backlog.py` when they start. The shared `LABELS`, `SYSTEM_PROMPT` and `TriageResult` are gone, so nothing can use an old copy by mistake.
+  - Nothing looks different on the page. It's what lets part 5's new labels work without a restart.
 - **Learned:**
   - When moving code shouldn't change anything, compare before and after (a "regression test"). I drew Action needed with the committed templates and the new ones, on the same data, and compared the results.
   - A template's escaping isn't the same as Python's `html.escape`: an apostrophe becomes `&#39;` instead of `&#x27;`. Four of my checks first failed on apostrophes, and the page was right. A failing test can be the test's fault, so it pays to find out which before changing anything.
@@ -905,6 +909,9 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - A request's body can only be read once, like a tape that doesn't rewind. A framework can keep a copy, but only if it's asked to (see Found below).
   - A stand-in can sit low down: mine mimics Gmail's API itself, so the real functions in `gmail_client.py` and the real `undo.py` ran on top of it.
   - SQL's `NOT EXISTS` asks "is there no such row in this other table?" Unlike a join, it can't change how many rows come back, however many rows the other table has for that email.
+  - A value worked out when a file is imported stays fixed until the program restarts. Settings that can change belong at the start of each job instead, so a job never sees them change halfway.
+  - A Pydantic class can be made inside a function, so its allowed values can come from a file read at run time.
+  - The Anthropic library lets a test replace its connection. The real library code still runs, nothing leaves the computer, and the test can see the exact bytes it would have sent. Loading the committed code next to the new code then proves a change altered nothing, which is stronger than checking that the answers still look right.
 - **Result:**
   - **66 free tests, on a copy of my real log with stand-ins for Gmail:** all 45 are listed newest first, with descriptions and reasons in full. "Needs you" only shows in the inbox group, and the full read has the last word on it. Gmail gets asked once per page load.
   - When the login has ended, Google can't be reached, or Google has a problem, the page keeps its list and shows the right notice. Text trying to be code shows as plain text in all five places it can appear. An email with no suggestion doesn't say "None", and with no known account there's no link.
@@ -926,12 +933,19 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
     - **Failures:** Gmail's 2 requests each failed in 7 different ways, with nothing recorded, and the same click worked afterwards. An email deleted from Gmail can be rejected, also when it's deleted between asking and changing. 6 kinds of forged click were refused.
     - **`undo.py`:** Unsorted comes off, emails return to the inbox exactly when they should, and the reject is forgotten with the email.
   - **Part 3, in a real browser, with made-up emails and a stand-in for Gmail:** the button greys out, the row says what happened in each case, and the count follows without a reload. A failure showed up in the row, and the same click then worked. Move still works beside it, and it all fits at phone width with no console errors. Tests for parts 1 and 2 still pass, except the 2 checks in part 1's that the page has no forms.
+  - **Part 4, 82 free tests, with a fake connection to Claude and a stand-in for Gmail's API:**
+    - **Nothing changed for Claude:** with my real labels, the example labels and labels with awkward characters, the instructions, the answer's shape and the whole request came out byte-for-byte the same as from the committed code.
+    - **A new label, added while the server runs:** the next press of Sort tells Claude about it and allows it as an answer, makes the label in Gmail once and sorts under it. Before that, an answer outside the list is refused and the email stays new. The Unsorted page's dropdown and Move know it straight away.
+    - **A label added during a sort:** all 3 emails in that run got exactly the same instructions and allowed answers, and the next sort has the new label. A label removed by hand is gone from the next sort.
+    - **`triage.py` and `backlog.py`:** a dry run and `--apply`, then `sample`, `submit` and `apply`, all work with the labels as they are when they start, and a batch request matches the old code's.
+    - Nothing looks different, so there was no browser check this time. Tests for parts 1 to 3 still pass, apart from the same 2 checks in part 1's.
 - **Found:**
   - **Gmail refused part of a request for 45 emails at once, at email 37.** `get_emails()` waited a minute and then finished fine. It's harmless, but the Sort button fetches the same way, so with more than about 37 new emails it may sit on "Looking for new emails…" for a minute.
   - **Nothing on this page has run against real Gmail yet,** on purpose. I won't use the page until the History page is up, so the Gmail changes behind Move have only been tested with stand-ins, and the same goes for Open in Gmail on an archived email: the link says `#inbox`, and Google doesn't document these links. They're on the list below.
   - **A bug from piece 3, found by testing Move:** a plain form that sent its secret code in a hidden field lost all its other fields. Checking the code read the request's form, which used up the body, so the page's own function found the form empty. Nothing had hit this yet: `/sign-in` doesn't read its form, and Move sends the code as a header. It now keeps a copy of the body first, a one-line fix in `web/csrf.py`.
   - **A rare gap:** if the log can't be written after Gmail has already changed, the page says the move didn't finish, and the same click finishes it. But the log then notes that the email already had the label, so undoing its run would leave the label on. Reject has the same gap with the inbox. Sorting has the same order and the same gap, and a failed write to this small file is very unlikely.
   - **For piece 5:** undoing a reject has to bring the email back onto the list. `_WAITING_FOR_LABEL` looks for a "rejected" row, so it will need to ignore rows that have been undone.
+  - **A broken `labels.json` now does less harm.** Before, the server wouldn't start at all. Now Sort and Move say what went wrong, and the other pages keep working, apart from the Unsorted page, which shows a plain error until the file is fixed. No restart is needed after fixing it.
 
 ## What's left
 
@@ -981,7 +995,7 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - [x] part 1: the list of emails waiting for a label, read-only
   - [x] part 2: move an email to a label I already have, recorded in the log
   - [x] part 3: reject a suggestion
-  - [ ] part 4: read the labels at the start of each run, so a new label works without a restart
+  - [x] part 4: read the labels at the start of each run, so a new label works without a restart
   - [ ] part 5: approve or edit a suggestion, which adds the new label to Gmail and `labels.json`
 - [ ] **Step 7, piece 5:** the History page: past runs, how many emails went to each label, undo (whole runs and my own label changes), and a "Needs action" button
 - [ ] Once the History page is up, the real checks of the Unsorted page: move one real email, add one real label, and click Open in Gmail on an archived email

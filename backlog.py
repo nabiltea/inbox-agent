@@ -32,8 +32,8 @@ from dotenv import load_dotenv
 import database
 from gmail_client import change_labels_bulk, get_emails, get_gmail_service, get_or_create_labels, list_message_ids
 from triage import (
-    ARCHIVE_SORTED_EMAILS, INPUT_PRICE, LABELS, MODEL, OUTPUT_PRICE, SYSTEM_PROMPT, UNSORTED,
-    TriageResult, email_text, print_result, should_archive, triage,
+    ARCHIVE_SORTED_EMAILS, INPUT_PRICE, MODEL, OUTPUT_PRICE, UNSORTED,
+    email_text, print_result, read_sorting_rules, should_archive, triage,
 )
 
 load_dotenv()
@@ -68,11 +68,12 @@ def sample(count):
     emails = sorted(get_emails(service, ids), key=lambda email: email.date)
 
     client = anthropic.Anthropic()
+    rules = read_sorting_rules()
     print("Dry run: nothing in Gmail changes\n")
     results = []
     cost = 0.0
     for email in emails:
-        response = triage(client, email)
+        response = triage(client, email, rules)
         cost += (response.usage.input_tokens * INPUT_PRICE + response.usage.output_tokens * OUTPUT_PRICE) / 1_000_000
         if response.parsed_output is None:
             continue
@@ -96,15 +97,16 @@ def submit():
     emails = get_emails(service, ids)
 
     # A batch request takes the same settings as a normal call. messages.parse() normally
-    # turns TriageResult into a JSON schema for us; here we do that step ourselves.
-    schema = anthropic.transform_schema(TriageResult.model_json_schema())
+    # turns the answer's shape into a JSON schema for us; here we do that step ourselves.
+    rules = read_sorting_rules()
+    schema = anthropic.transform_schema(rules.answer_shape.model_json_schema())
     requests = [
         Request(
             custom_id=email.id,  # links each result back to its email
             params=MessageCreateParamsNonStreaming(
                 model=MODEL,
                 max_tokens=2000,
-                system=SYSTEM_PROMPT,
+                system=rules.system_prompt,
                 messages=[{"role": "user", "content": email_text(email)}],
                 output_config={"effort": "low", "format": {"type": "json_schema", "schema": schema}},
             ),
@@ -153,6 +155,7 @@ def apply():
         sys.exit("The batch isn't finished yet. Run: python backlog.py wait")
 
     # 1. Read Claude's answers. Each result carries the custom_id we gave it: the email's ID.
+    rules = read_sorting_rules()
     results, costs, failed = {}, {}, 0
     for item in client.messages.batches.results(batch_id):
         if item.result.type != "succeeded":  # errored, expired or canceled
@@ -167,7 +170,7 @@ def apply():
             failed += 1
             continue
         text = next(block.text for block in message.content if block.type == "text")
-        results[item.custom_id] = TriageResult.model_validate_json(text)  # JSON text -> TriageResult
+        results[item.custom_id] = rules.answer_shape.model_validate_json(text)  # JSON text -> the answer's shape
 
     # 2. Get each email's current labels from Gmail, in case anything changed since submitting.
     service = get_gmail_service()
@@ -175,7 +178,7 @@ def apply():
     todo = [message_id for message_id in results if not database.is_processed(conn, message_id)]
     print(f"{len(results)} emails sorted, {failed} failed. Fetching {len(todo)} from Gmail to apply...")
     emails = get_emails(service, todo)
-    label_ids = get_or_create_labels(service, [*LABELS, UNSORTED])
+    label_ids = get_or_create_labels(service, [*rules.labels, UNSORTED])
 
     # 3. Group emails that need exactly the same change, so Gmail can do up to 1,000 per request.
     groups = {}

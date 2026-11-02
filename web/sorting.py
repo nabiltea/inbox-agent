@@ -28,7 +28,7 @@ from gmail_client import (
     get_or_create_labels,
     inbox_message_ids,
 )
-from triage import LABELS, UNSORTED, apply_sorted, sort_email
+from triage import UNSORTED, apply_sorted, read_sorting_rules, sort_email
 
 log = logging.getLogger("uvicorn.error")
 
@@ -114,13 +114,15 @@ def _sort_new_emails(run):
             if not emails:
                 return
             client = anthropic.Anthropic()
-            label_ids = get_or_create_labels(service, [*LABELS, UNSORTED])
+            # Read here, not when the server starts, so a label I've just added works in this run.
+            rules = read_sorting_rules()
+            label_ids = get_or_create_labels(service, [*rules.labels, UNSORTED])
             run_id = datetime.now().isoformat(timespec="seconds")
             for email in emails:
                 if run.cost >= COST_LIMIT:
                     run.hit_limit = True
                     break
-                _sort_one(client, service, conn, run_id, label_ids, email, run)
+                _sort_one(client, service, conn, run_id, rules, label_ids, email, run)
                 run.done += 1
     except Exception as error:
         log.exception("Sorting stopped after %s emails", run.done)
@@ -129,9 +131,9 @@ def _sort_new_emails(run):
         run.running = False
 
 
-def _sort_one(client, service, conn, run_id, label_ids, email, run):
+def _sort_one(client, service, conn, run_id, rules, label_ids, email, run):
     """Decide about one email, carry it out, and add it to the run's numbers."""
-    sorted_email = sort_email(client, service, email)
+    sorted_email = sort_email(client, service, email, rules)
     run.cost += sorted_email.cost + sorted_email.read_cost
     if sorted_email.result is None or sorted_email.read_problem:
         run.skipped += 1
