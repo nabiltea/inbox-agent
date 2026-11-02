@@ -18,13 +18,15 @@ nothing in Gmail changes.
 """
 
 import argparse
+import json
+import unicodedata
 from contextlib import closing
 from datetime import date, datetime
-from typing import Literal
+from typing import Annotated, Literal
 
 import anthropic
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field
+from pydantic import AfterValidator, BaseModel, Field
 
 import database
 from gmail_client import get_gmail_service, get_message, inbox_message_ids
@@ -61,6 +63,8 @@ What counts:
 
 Links in the email appear as [link: site], showing only the site each one goes to.
 
+Never copy bank account numbers, payment links, phone numbers or one-time codes from the email into your answer, because the email could be a fake. Only if the email really gives such details and a step needs them, refer to them, like "the account number in the email". Amounts and the name of who to pay are fine.
+
 """
 
 EMAIL_IS_CONTENT = """\
@@ -78,6 +82,30 @@ A first reader couldn't decide about this email. Read it closely and decide: yes
 """ + EMAIL_IS_CONTENT
 
 
+def remove_invisible(text):
+    """Takes out invisible characters, which Unicode files under "other" (categories starting with C).
+
+    A model's answer can contain them: one read wrote backspaces in the middle of a word, which
+    the page drew as small boxes. Some can also make text display backwards, so a fake address
+    could pass for a real one on the page. Line breaks and tabs become plain spaces first.
+    """
+    return "".join(c for c in " ".join(text.split()) if not unicodedata.category(c).startswith("C"))
+
+
+def has_invisible(value):
+    """Whether a value from Claude's answer (text or a list of text) has invisible characters.
+
+    Line breaks and tabs don't count: remove_invisible() only turns those into spaces.
+    """
+    if isinstance(value, list):
+        return any(has_invisible(item) for item in value)
+    return isinstance(value, str) and any(unicodedata.category(c).startswith("C") and not c.isspace() for c in value)
+
+
+# Text in the form: a plain string to Claude, cleaned as soon as the answer arrives.
+CleanText = Annotated[str, AfterValidator(remove_invisible)]
+
+
 class FullRead(BaseModel):
     """The form Claude fills in for each email.
 
@@ -86,9 +114,13 @@ class FullRead(BaseModel):
     """
 
     needs_me: Literal["yes", "no", "unsure"]
+    what_to_do: CleanText | None = Field(
+        description="The task itself, in one short line in English, like 'Sign the contract on Dropbox Sign' or "
+        "'Reply to Sam on LinkedIn'. Not a first step like 'Open the email'. null if needs_me is no."
+    )
     kind: Literal[KINDS] | None = Field(description="What I have to do. null if needs_me is no.")
-    steps: list[str] = Field(description="What exactly to do, as 1 to 4 short steps in order. Empty if needs_me is no.")
-    where: str | None = Field(
+    steps: list[CleanText] = Field(description="What exactly to do, as 1 to 4 short steps in order. Empty if needs_me is no.")
+    where: CleanText | None = Field(
         description="Where to do it: first the name of the site or app, then its main web address in brackets, "
         "without parts like 'app.' or 'www.', like 'Dropbox Sign (dropbox.com)'. Some link sites only track clicks: "
         "name the real site. null for a reply by email, or if needs_me is no."
@@ -98,7 +130,7 @@ class FullRead(BaseModel):
         description="true only if it has to happen soon and the email gives no date, like 'today' or "
         "'as soon as possible'. false whenever there is a deadline."
     )
-    reason: str = Field(description="Why, in one short sentence in English, speaking to me as 'you'.")
+    reason: CleanText = Field(description="Why, in one short sentence in English, speaking to me as 'you'.")
 
 
 class Review(FullRead):
@@ -110,7 +142,7 @@ class Review(FullRead):
 # When neither model gives a usable answer (a refusal, or an answer cut off), it counts
 # as needing me: better a false alarm than a missed to-do.
 COULD_NOT_READ = Review(
-    needs_me="yes", kind="other", steps=["Open the email in Gmail and check it yourself."],
+    needs_me="yes", what_to_do="Check this email yourself", kind="other", steps=["Open the email in Gmail and check it yourself."],
     where=None, deadline=None, time_sensitive=False, reason="Neither model gave a usable answer.",
 )
 
@@ -141,7 +173,12 @@ def email_text(message):
 
 
 def _ask(client, model, system, form, text):
-    """One request to one model. Returns (the filled-in form, or None if there's no usable answer; the cost in dollars)."""
+    """One question to one model. Returns (the filled-in form, or None if there's no usable answer; the cost in dollars).
+
+    The form takes invisible characters out of an answer, but that can leave a word with a
+    letter missing, like "alance" for "balance". So when an answer has them, the model is
+    asked once more. A second answer with them is still cleaned, just not asked about again.
+    """
     request = {
         "model": model,
         "max_tokens": 8000,
@@ -152,15 +189,38 @@ def _ask(client, model, system, form, text):
         "output_config": {"effort": "medium"},
         "output_format": form,  # makes Claude answer in exactly this form
     }
+    response = _send(client, model, request)
+    cost = _cost(response, model)
+    if response.parsed_output is not None and _had_invisible(response):
+        second = _send(client, model, request)
+        cost += _cost(second, model)
+        if second.parsed_output is not None:
+            response = second
+    return response.parsed_output, cost
+
+
+def _send(client, model, request):
+    """Sends one request to one model and returns the response."""
     if model == REVIEWER:
         # If Sonnet's safety checks ever decline an email, Claude's API retries it on
         # another suitable model within the same request, instead of giving no answer.
-        response = client.beta.messages.parse(**request, betas=["server-side-fallback-2026-07-01"], fallbacks="default")
-    else:
-        response = client.messages.parse(**request)
+        return client.beta.messages.parse(**request, betas=["server-side-fallback-2026-07-01"], fallbacks="default")
+    return client.messages.parse(**request)
+
+
+def _cost(response, model):
+    """What one response cost, in dollars."""
     input_price, output_price = PRICES.get(response.model, PRICES[model])
-    cost = (response.usage.input_tokens * input_price + response.usage.output_tokens * output_price) / 1_000_000
-    return response.parsed_output, cost
+    return (response.usage.input_tokens * input_price + response.usage.output_tokens * output_price) / 1_000_000
+
+
+def _had_invisible(response):
+    """Whether a response's answer had invisible characters. Its form has already removed
+    them, so this looks at the answer as Claude wrote it. strict=False lets json read text
+    with control characters in it, which is what this is looking for.
+    """
+    block = next(block for block in response.content if block.type == "text" and block.parsed_output)
+    return any(has_invisible(value) for value in json.loads(block.text, strict=False).values())
 
 
 def full_read(client, message):
@@ -196,6 +256,8 @@ def print_result(number, total, row, result, model, cost):
                "time-sensitive" if result.time_sensitive else None, result.where]
     reader = "Haiku" if model == FIRST_READER else "Sonnet"
     print(f"  Full read:  {result.needs_me}, by {reader}" + "".join(f" · {d}" for d in details if d))
+    if result.what_to_do:
+        print(f"              To do: {result.what_to_do}")
     for step_number, step in enumerate(result.steps, 1):
         print(f"              {step_number}. {step}")
     print(f"              Why: {result.reason}  (${cost:.4f})\n")

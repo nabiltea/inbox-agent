@@ -68,9 +68,15 @@ def connect():
             time_sensitive INTEGER,
             reason TEXT,
             model TEXT,
-            cost REAL
+            cost REAL,
+            what_to_do TEXT
         )
     """)
+    # The one-line what_to_do came after this table did, so a database file made earlier
+    # doesn't have it. The same kind of migration as "archived" above.
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(full_reads)")}
+    if "what_to_do" not in columns:
+        conn.execute("ALTER TABLE full_reads ADD COLUMN what_to_do TEXT")
     # SQLite only enforces links between tables (like the one above) when this is
     # switched on, and only for this connection, so it's switched on every time.
     conn.execute("PRAGMA foreign_keys = ON")
@@ -121,11 +127,11 @@ def save_full_read(conn, message_id, result, model, cost):
     conn.execute(
         """
         INSERT OR REPLACE INTO full_reads (
-            message_id, read_at, needs_me, kind, steps, place, deadline, time_sensitive, reason, model, cost
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            message_id, read_at, needs_me, what_to_do, kind, steps, place, deadline, time_sensitive, reason, model, cost
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
-            message_id, datetime.now().isoformat(timespec="seconds"), result.needs_me, result.kind,
+            message_id, datetime.now().isoformat(timespec="seconds"), result.needs_me, result.what_to_do, result.kind,
             json.dumps(result.steps, ensure_ascii=False), result.where,
             result.deadline.isoformat() if result.deadline else None, result.time_sensitive, result.reason, model, cost,
         ),
@@ -146,8 +152,8 @@ def flagged_emails(conn):
     empty (NULL) for an email that has none.
     """
     return conn.execute("""
-        SELECT decisions.*, f.needs_me AS full_read, f.kind, f.steps, f.place, f.deadline, f.time_sensitive,
-               f.reason AS full_read_reason
+        SELECT decisions.*, f.needs_me AS full_read, f.what_to_do, f.kind, f.steps, f.place, f.deadline,
+               f.time_sensitive, f.reason AS full_read_reason
         FROM decisions LEFT JOIN full_reads AS f ON f.message_id = decisions.message_id
         WHERE decisions.archived = 0
           AND (f.needs_me = 'yes' OR (f.needs_me IS NULL AND (decisions.needs_reply = 1 OR decisions.needs_action = 1)))

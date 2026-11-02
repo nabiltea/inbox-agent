@@ -25,7 +25,7 @@ rebuilds the CSS every time a file is saved. (A public site would add --minify.)
 import hashlib
 import mimetypes
 from contextlib import closing
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -108,8 +108,21 @@ def show_date(date):
     return text if date.year == datetime.now().year else f"{text} {date.year}"
 
 
-# Lets the templates use show_date as a "filter": {{ todo.received|show_date }}
+def show_deadline(deadline):
+    """A deadline in words: "Due today", "Due tomorrow", "Due Tue 10 Nov" or "Was due Fri 6 Nov"."""
+    days_left = (deadline - date.today()).days
+    if days_left < 0:
+        return f"Was due {show_date(deadline)}"
+    if days_left == 0:
+        return "Due today"
+    if days_left == 1:
+        return "Due tomorrow"
+    return f"Due {show_date(deadline)}"
+
+
+# Lets the templates use these as "filters": {{ todo.received|show_date }}
 templates.env.filters["show_date"] = show_date
+templates.env.filters["show_deadline"] = show_deadline
 
 
 # Lets the templates call gmail_link(...) from gmail_client.py directly, the way they
@@ -186,12 +199,15 @@ def action_needed(request: Request):
     # closing() closes it again afterwards, even if something goes wrong.
     with closing(database.connect()) as conn:
         flagged = database.flagged_emails(conn)
+    todos = list_todos(flagged, inbox_ids)
     return templates.TemplateResponse(
         request=request,  # the browser's request, which templates need to build links
         name="action.html",
         context={  # the values the template can use
             "active": "action_needed",
-            "todos": list_todos(flagged, inbox_ids),
+            "todos": todos,
+            "urgent": sum(todo.urgency == "urgent" for todo in todos),
+            "overdue": sum(todo.urgency == "overdue" for todo in todos),
             # For the "Open in Gmail" links: read from the saved login, so no request to Gmail.
             # The links work even when the app can't reach Gmail: Chrome has its own sign-in.
             "gmail_address": saved_account(),

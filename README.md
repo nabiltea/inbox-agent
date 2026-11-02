@@ -375,7 +375,7 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - **Claude Sonnet** reviews only the unsure ones.
   - Cost estimate for this stage: about $0.50 a month, against about $2 if Sonnet read everything. The whole app should cost about $1.50 to $2 a month in normal use.
 - **Why lean towards flagging:** missing an email that needs action is much worse than a false alarm I can dismiss in a second. In other words, recall matters more than precision here. The full read filters out the false alarms, and the History page's "Needs action" button catches anything both models miss.
-- **Urgency is decided by code, not the model:** the model only finds the deadline. Overdue or due within 2 days counts as **urgent**, and everything else is normal. "Time-sensitive" emails without a date are marked separately.
+- **Urgency is decided by code, not the model:** the model only finds the deadline. Due within 2 days counts as **urgent**, overdue to-dos get a gray tag of their own and sit after the urgent ones, and everything else is normal. "Time-sensitive" emails without a date are marked separately.
 
 **Build order** (one small piece at a time, with my decisions along the way)
 1. A bare page that shows my current to-dos (learning how FastAPI, templates and Tailwind fit together, with nothing that changes Gmail yet), in six smaller pieces (see below)
@@ -698,6 +698,79 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
     - **The link holds:** a full read for an email the log doesn't know was refused, and undoing a run removed its full reads, with none left behind.
   - The real log only got the new, empty table: 6,588 emails and 0 full reads. The pages and Claude Desktop's list are unchanged, with 26 conversations.
 
+**Piece 2, part 3: urgency, on the page and for Claude Desktop (in progress)**
+- **Decided:**
+  - **Urgency is worked out fresh and never saved,** like storing a birthday and calculating an age. The log keeps the deadline, and the recipe in `todos.py` compares it with today on every page load. A deadline on the 10th is normal on the 2nd and turns urgent on the 8th by itself. A saved urgency would go out of date overnight.
+  - **Due today, tomorrow or the day after is urgent.** On 2 November, that means 2, 3 and 4 November. A deadline of today isn't overdue yet.
+  - **The order:** urgent (soonest first), time-sensitive (newest first), overdue (least late first), then the rest (dated ones by soonest date, then undated ones newest first). Overdue stays below what I can still do with a clock on it, but above the rest. The reader already says that a date that has passed needs nothing, so a to-do only goes overdue if it was on my list in time. That makes overdue rows rare and worth seeing: either I really missed something, or I did it and didn't archive the email.
+  - **The form gets one more box: the task in one line.** I looked at the real steps from part 1's dry run, and the first step is often just preparation, like "Open LinkedIn and go to Messaging". Using triage's line instead would take the last word away from the full read, and an email only the full read flagged doesn't have one.
+  - **One tag per fully read email, in specific words:** Reply, Sign, Pay, Verify, Attend, Invitation, and Action for the rest. Replies stay blue and the others amber. A reply on another site counts as a reply, so LinkedIn messages move from "action" to "reply" on the home page once they've had a full read.
+  - **A conversation's date comes from its newest email that gives one.** A newer date replaces an older one, and a reminder without a date doesn't erase it. An archived email's date no longer counts.
+  - **Steps stay folded on every row,** with the "why" in the same fold. It's the quickest way to spot a false alarm.
+  - **"Time-sensitive" lasts until I archive the email.** It has no date, so nothing ends it. I looked at this again with real results: four rows, all one to two weeks old, and three were reminders for the same contract. A 7-day limit would have taken the tag off a blocked booking that still needed me. The clutter comes from the repeats, not the tag.
+  - **A step never copies payment details from an email.** Bank account numbers, payment links, phone numbers and one-time codes stay out of the reader's answer, for the same reason as links: a phishing email's account number would appear on my own page, looking trustworthy. Amounts and who to pay are still shown.
+  - **A conversation stays on the list if any of its emails still needs me,** even when the newest one says no. A false alarm takes a second to dismiss, while letting the newest email decide could hide "please sign by Friday" behind an unrelated note.
+  - **Each task shows once,** rather than once per Gmail conversation. Gmail keeps four reminders for one contract as four conversations, but they're one thing to do.
+    - **The same task means the same sender and the same kind.** On my real rows, that merges one contract's reminders and one person's messages, and nothing else. Exactly the same words wasn't enough, because Claude worded the contract four different ways. Having code compare how alike the wording is can't work either: the contract's pairs (the same task) scored 0.73 to 0.92, and two different messages from one sender scored 0.87, so no cut-off separates them. Asking Claude might be the most accurate, but it means a new box, a new column and more cost per read, so it's an upgrade to consider if this rule makes mistakes.
+    - **Three limits:** kind "other" never merges, because it could be anything. "Reply by email" never merges, because each conversation needs its own reply. Two rows with different dates never merge, like two events from one organizer.
+    - **Nothing disappears.** The row says "+4 more emails", and its fold lists the task's other conversations, each with its date, its line and its own "Open in Gmail". A to-do stays until I archive it, so I need to be able to reach all of them. This also covers the rule's one risk: two different documents from one person, with no dates, would share a row, but both are listed.
+    - **The list counts "to-dos" now, not "conversations",** on both pages, because a row can hold several conversations.
+    - Without a full read there's no kind, so nothing merges: my real page keeps its 26 rows for now.
+  - **Urgent counts** go on Action needed and on the home page's first card, and **the cost card** becomes one total with a small split between sorting and full reads.
+  - **`list_todos()` is told today's date,** like the two lists it's already given. Normally it uses the computer's date, but a test can ask what the list will look like on 9 November without waiting until then.
+  - **The test on real data comes with the page,** reading all 60 flagged emails on a copy of the log, rather than only the newest email per conversation, so the date rule above can be seen on real conversations.
+- **Built so far, the recipe and the log:**
+  - `what_to_do` on the form in `full_read.py`, printed by the dry run. When neither model answers, it says "Check this email yourself".
+  - In `database.py`: a `what_to_do` column in `full_reads`, added by a small migration, which `save_full_read()` fills in and `flagged_emails()` reads. A log made before this gets the column the first time it's opened, and a new one is created with it, in the same position.
+  - In `todos.py`: the new fields on `Todo` (kind, steps, place, why, deadline and urgency), `_urgency()` and `_position()`. The full read's kind now decides between reply and action, which fixes the empty tags for an email only the full read flagged.
+- **Built so far, the Action needed page:**
+  - `action.html`: a tag for how pressing a to-do is (a red "Urgent", a red outline for "Time-sensitive", a gray "Overdue"), a tag for its kind, a line with the date and place, the steps and the "why" in a fold, and urgent and overdue counts next to the heading. A small macro draws the tags.
+  - `show_deadline()` in `web/app.py`: "Due today", "Due tomorrow", "Due Tue 10 Nov" or "Was due Fri 6 Nov". The tag column got wider so "Time-sensitive" fits. That and the word "to-dos" are the only changes on the real page while the log has no full reads.
+- **Built so far, each task once:**
+  - `_one_row_per_task()` and `_same_task()` in `todos.py`, which run after the conversations have their rows, and a small `OtherConversation` for each merged conversation.
+  - The "Also about this" list in the fold in `action.html`, with one macro for every "Open in Gmail" link. The links now stay in one piece instead of breaking across lines.
+- **Built so far, safer answers from the reader, in `full_read.py`:**
+  - The rule against copying payment details, in the reader's instructions. It adds 91 input tokens to each read, about 1 cent a month.
+  - `remove_invisible()` and a `CleanText` type for the form's text boxes. Claude still sees a plain form, and the cleaning happens as the answer arrives.
+  - `_ask()` asks the same model once more when an answer had invisible characters, and adds up the cost of both requests. Line breaks and tabs don't count, because cleaning only turns those into spaces.
+- **Learned:**
+  - A value that can be calculated usually shouldn't be stored, because the stored copy can go out of date. Here it would be wrong by the next morning.
+  - A function that looks at the clock by itself is hard to test. Handing it the date as an input makes it easy, and it's the same reason `list_todos()` is handed its two lists.
+  - Python sorts by several things at once when each row's sort key is a tuple, and a sort that keeps ties in their original order (a "stable" sort) means undated rows stay newest first with no extra code.
+  - Git can act as a test: running the previous version of a file from Git next to the new one shows whether anything changed that shouldn't have.
+  - `<details>` gives a fold with no JavaScript, and a Jinja macro is a reusable piece of template, like a function.
+  - A price estimate is only as good as its sample. One measured average from a different mix of emails can be off by a factor of three.
+  - Text can hold characters you can't see. Unicode files them under "other", and some can make text display backwards. Checking a page in the browser found what the terminal had hidden.
+  - A Pydantic validator can clean a value as it arrives, without changing the form the model is shown.
+  - Fake replies can test every path of a retry, like a second answer that also fails, without paying for it or waiting for a rare glitch. They can't prove it works with a real reply, so one real read is still worth it.
+- **Result:**
+  - 75 tests passed, with no paid Claude calls and nothing changed in Gmail:
+    - **Urgency:** every day around the boundaries, a new year, and a date beating "time-sensitive".
+    - **The order:** ten made-up rows came out in exactly the decided order, and rows moved by themselves when the test changed the date.
+    - **The full read's last word:** an email only it flagged has its kind, text and steps, and each of the 8 kinds counts as exactly one of reply or action.
+    - **A conversation's date:** a reminder keeps the older date, a newer date replaces it, and an archived email's date doesn't count.
+    - **The log, on a copy:** the column arrived once and stayed, all 6,588 rows and their 18 columns were unchanged, and a brand-new log has the same columns in the same order. On the copy, with hand-filled forms, a to-do due on the 10th was normal on the 2nd, urgent on the 9th and overdue on the 11th, and a euro sign in the steps survived saving and reading back.
+    - **Nothing changes yet:** with 0 full reads, the old recipe from Git and the new one gave the same 26 conversations, in the same order, with the same fields. Action needed and the home page still load on a real server using a copy of the log.
+  - The tests didn't touch the real log: its file was identical before and after. It got its empty column when my own server next opened it, and it still has 6,588 emails and 0 full reads.
+  - **The page, 48 more free tests with hand-filled forms on a copy:** every kind gets the right word and colour, the order and counts are right, every fold starts closed, and an email only the full read flagged gets its kind's tag and text. Planted `<script>` tags, an image and a link to a fake site all showed as plain text: the only link in that row was Open in Gmail. With no full reads, the page still has the same 26 rows and tags.
+  - **Real reads, on a copy of the log:** all 60 flagged emails for $0.163, with nothing changed in Gmail and the real log still at 0 full reads.
+    - **The list shrank from 26 conversations to 19.** 18 of the 60 emails needed nothing, and 7 conversations left the list completely: two expired codes or links, a flight that had already left, an application that had closed, a receipt, a bank's notice and an optional event profile.
+    - **The new one-line box did its job,** with the real task instead of a first step.
+    - **Each task once:** 59 more free tests, and the real reads went from 19 rows to 13, with one contract (5 emails in 4 conversations) and one person's messages (7 emails in 4 conversations) on one row each. Two different messages from one sender, and four different buyers on a marketplace, stayed apart. No email got lost: the rows still add up to all 42 emails that need me, and all 19 conversations can be reached, with 19 links that all go to Gmail.
+    - **The cleaning:** 38 more free tests, including a raw answer with backspaces and a backwards-text character, run through the Anthropic SDK's own parsing the way a real answer arrives. On the 272 pieces of text in the real reads, only the one with backspaces changed, and text with €, ®, accents, Japanese, Arabic and emoji stayed as it was.
+    - **On a test server,** today's list starts with three time-sensitive rows, then a to-do with a real date. Pretending it was the day before that date turned it urgent by itself ("Due tomorrow"). Three other dates were planted to show the other states, like a "Was due" date on a gray Overdue row. Every link in the list goes to Gmail, and nothing sticks out sideways on a phone.
+    - **Asking again:** 57 more free tests with made-up replies, built from the Anthropic package's own types, for both models. It asks again for invisible characters in any text box, stops after two requests, adds up the cost, keeps the first answer if the second is unusable, and doesn't ask again for line breaks, €, Japanese or emoji. One real read of an email ($0.008) went through Haiku and Sonnet without a problem and came back clean.
+  - **In total,** 277 free tests pass, and the paid tests cost $0.203: $0.163 for the 60 reads and $0.040 for re-reading a few emails.
+- **Found:**
+  - **The new box costs more than I estimated.** Token counting, which is free, shows it adds 152 input tokens to each read, because the form's text is sent with every request. With a short answer and Sonnet's reviews, that comes to about 1.5 cents a month at 5 reads a day, rather than the fifth of a cent I'd worked out by counting only the answer. That's still well within budget.
+  - **The test cost almost three times my estimate:** $0.163 instead of about $0.06. Sonnet reviewed 23 of the 60 emails, against 4 of 31 in part 1, and those 23 took 90% of the spending. 17 of those 23 were very short messages from old second-hand sales, where Haiku couldn't tell what was still open. Without those, a read cost about $0.002. At 5 reads a day, that's about $0.30 to $0.40 a month rather than $0.15, still under the $0.50 to $1 first estimated.
+  - **The reader only sees one email at a time.** In three conversations on a marketplace site, the newest email said no (just a thank-you) and an older one said yes, so the conversation stays on the list. My answers on that site don't reach Gmail, so the reader can't know I've replied.
+  - **Found and fixed: the same task filled several rows.** One contract's reminders and one person's LinkedIn messages are separate Gmail conversations, so they took 8 of the 19 rows, with three of the reminders near the top.
+  - **Found and fixed: a step can copy payment details from an email.** One read put a bank account number in its steps. It's plain text, but it's the same risk as a link. One rule in the reader's instructions fixed it, on the third wording: the first two made another email's steps mention details it doesn't have. Now such a step says "using the account number in the email", and a payment handled on a company's own site points there. The three rounds cost $0.032.
+  - **Gmail's inbox check occasionally fails for a moment.** Across all the test runs, two page loads got "Couldn't reach Gmail", and the next load worked. The page did what it should: it showed its notice and everything it could. 40 direct checks in a row all worked, about 0.4 seconds each, so I haven't found the cause.
+  - **Reading the same email twice can differ in the details.** Across those re-reads, one email's "time-sensitive" went from no to yes, while the decision itself stayed the same. This is what the accuracy tests in Step 8 are for.
+  - **Found and fixed: an answer can contain invisible characters.** I first took "alance" in one answer for a typo, because the terminal hid what was wrong. On the page, the same word showed small boxes: Sonnet's text had two backspace control characters, one where the "b" should be and one in the middle of the word, and no "b" at all. It's 1 of the 272 pieces of text in the reads, but it matters beyond looks, because some invisible characters make text display backwards, so a fake address could pass for a real one in the "where" line. The form now removes them from all its text as each answer arrives. Cleaning alone can't bring back a missing letter, and the word read "alance", so when an answer has invisible characters, the reader now asks the same model once more and uses the second answer. A second answer with them would still be cleaned. Re-reading that email for real gave the whole word.
+
 ## What's left
 
 - [x] **Step 1:** First call to Claude
@@ -739,13 +812,13 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 - [ ] **Step 7, piece 2:** the full-read step (Haiku, with Sonnet for unsure cases) and urgency, in four parts:
   - [x] part 1: the full read itself, with a dry run on real emails
   - [x] part 2: saving the results in the log, in a table of their own
-  - [ ] part 3: urgency, shown on the page and to Claude Desktop
+  - [ ] part 3: urgency, shown on the page and to Claude Desktop, and on the home page: urgent counts, the cost card, and how many emails the last run put in each label
   - [ ] part 4: triage runs the full read for new emails, before deciding what to archive
 - [ ] **Step 7, piece 3:** the "Sort new emails" button, with a summary of what arrived and what needs me
 - [ ] **Step 7, piece 4:** the Unsorted page: approve, edit or reject label suggestions, or pick a label by hand
 - [ ] **Step 7, piece 5:** the History page: past runs, undo, and a "Needs action" button
 - [ ] **Step 7, piece 6:** the draft flow: "Draft reply" with a hints box, the Critic's verdict, and saving to Gmail drafts, also when the Critic isn't satisfied
-- [ ] An archive button for to-dos on the page, so I can clear the overdue ones there instead of in Gmail. It changes Gmail, so it needs the protection against other websites pressing buttons that piece 3 adds
+- [ ] An archive button for to-dos on the page, so I can clear the overdue ones there instead of in Gmail. A row can hold several conversations, so one click should archive them all. It changes Gmail, so it needs the protection against other websites pressing buttons that piece 3 adds
 - [ ] A double-click shortcut that starts the web page, so opening it doesn't need VS Code
 - [ ] Decide whether to move the Google app from "Testing" to "In production", which would end the weekly sign-in (first check Google's rules for unverified apps that use Gmail)
 - [ ] Reorganize the project into folders, as its own step after Step 7, with one setting for where the data files live
@@ -769,7 +842,7 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 | `label_designer.py` | Step 4: Claude Opus suggests a label set from my inbox and existing labels |
 | `labels.example.json` | A shareable example label set. My real labels are in `labels.json`, which isn't in Git |
 | `database.py` | The agent's memory: a SQLite log of every email it handled and what it decided |
-| `todos.py` | Step 7: what counts as a to-do, in one place. `list_todos()` combines the agent's flagged emails with Gmail's list of what's in my inbox. Used by the web page and the MCP server |
+| `todos.py` | Step 7: what counts as a to-do, in one place. `list_todos()` combines the agent's flagged emails with Gmail's list of what's in my inbox, works out how pressing each one is, and puts the most pressing first. Used by the web page and the MCP server |
 | `undo.py` | Reverses the last run (`triage.py --apply` or `backlog.py apply`): removes the labels it added and moves archived emails back into the inbox |
 | `backlog.py` | Sorts the whole inbox backlog with Claude's Message Batches API: `sample`, `submit`, `wait`, `apply` |
 | `gmail_mcp_server.py` | My Gmail MCP server: search, read threads, list to-dos, save reply drafts. No send, delete or archive |
