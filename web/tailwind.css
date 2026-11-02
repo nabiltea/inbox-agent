@@ -6,6 +6,9 @@
    of the project. */
 @import "tailwindcss" source(".");
 
+/* The files in static/ aren't mine to style, like HTMX's code, whose words would otherwise look like class names. */
+@source not "./static";
+
 /* The Inter font, served by this app from web/static/fonts/ rather than from an
    outside server. It's a "variable" font: one file holds every weight, from thin
    to black. swap shows the text straight away and switches to Inter once it's loaded. */

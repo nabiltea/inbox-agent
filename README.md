@@ -779,7 +779,7 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - **The reader only sees one email at a time.** In three conversations on a marketplace site, the newest email said no (just a thank-you) and an older one said yes, so the conversation stays on the list. My answers on that site don't reach Gmail, so the reader can't know I've replied.
   - **Found and fixed: the same task filled several rows.** One contract's reminders and one person's LinkedIn messages are separate Gmail conversations, so they took 8 of the 19 rows, with three of the reminders near the top.
   - **Found and fixed: a step can copy payment details from an email.** One read put a bank account number in its steps. It's plain text, but it's the same risk as a link. One rule in the reader's instructions fixed it, on the third wording: the first two made another email's steps mention details it doesn't have. Now such a step says "using the account number in the email", and a payment handled on a company's own site points there. The three rounds cost $0.032.
-  - **Gmail's inbox check occasionally fails for a moment.** Across all the test runs, two page loads got "Couldn't reach Gmail", and the next load worked. The page did what it should: it showed its notice and everything it could. 40 direct checks in a row all worked, about 0.4 seconds each, so I haven't found the cause.
+  - **Gmail's inbox check occasionally fails for a moment.** Across all the test runs, a few page loads got "Couldn't reach Gmail", and the next load worked. The page did what it should: it showed its notice and everything it could. 40 direct checks in a row all worked, about 0.4 seconds each, so I haven't found the cause.
   - **Reading the same email twice can differ in the details.** Across those re-reads, one email's "time-sensitive" went from no to yes, while the decision itself stayed the same. This is what the accuracy tests in Step 8 are for.
   - **Found and fixed: an answer can contain invisible characters.** I first took "alance" in one answer for a typo, because the terminal hid what was wrong. On the page, the same word showed small boxes: Sonnet's text had two backspace control characters, one where the "b" should be and one in the middle of the word, and no "b" at all. It's 1 of the 272 pieces of text in the reads, but it matters beyond looks, because some invisible characters make text display backwards, so a fake address could pass for a real one in the "where" line. The form now removes them from all its text as each answer arrives. Cleaning alone can't bring back a missing letter, and the word read "alance", so when an answer has invisible characters, the reader now asks the same model once more and uses the second answer. A second answer with them would still be cleaned. Re-reading that email for real gave the whole word.
 
@@ -811,6 +811,56 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - **On these emails, the full read changed no decision.** The first look and the read agreed on all 16. What the read added here was what to do, the steps and the place.
   - **Found and fixed: the reader missed what a warning means.** A warning that an account's credit was running low, and that a service would stop without more, got "no": it read as information, because my rules didn't cover warnings. It would have been archived.
   - **A date can be in a different email.** A later email from an airline gave the date of a flight, but the to-do came from an earlier email with no date, so the list can't show it as urgent. It's the same limit as above: the reader sees one email at a time.
+
+**Piece 3: the "Sort new emails" button**
+- **Decided:**
+  - **The page shows progress while sorting.** Sorting takes about 2.3 seconds per email, so the button starts the work on a second thread and the page asks how far it is once a second, like a buzzer in a café instead of standing at the counter. A live stream from the server would be smoother but more complicated, with no real gain at this speed.
+  - **The button sorts for real.** I won't press it until the History page exists, as that's where undo will be. Until then, `undo.py` can reverse a run.
+  - **The summary gives the numbers and names the new to-dos,** up to 5, with a link to Action needed. The full list of every email belongs on the History page.
+  - **One click stops at $0.50.** That only happens on an unusual run. The rest stays new, and the summary says so.
+  - **No Stop button for now.** A normal run is short, and the limit covers the long ones.
+  - **A secret code on every button that changes something** (a "CSRF token"), rather than only checking the labels browsers put on requests. Both are accepted by OWASP, the main web security guide. The labels would be less code, but the code is the conventional method, works in any browser, and is what I'd meet in a company's web app.
+    - **I wrote it myself, following OWASP's "synchronizer token pattern".** OWASP says to use a framework's built-in protection if it has one, and FastAPI doesn't. The two common add-on packages use a signed cookie with no tie to a session, which OWASP now says gives "minimal protection", and one hasn't been updated since 2023.
+    - **The code isn't in a cookie,** because browsers send cookies to the app by themselves, whoever asked them to. The cookie only holds a random session ID. The code stays on the server and in the page's HTML, which other websites can't read.
+    - **Two extras OWASP also recommends:** a request saying it came from another website is refused even with the right code, and the session cookie has `SameSite=Lax`.
+  - **HTMX comes from my own app,** like the CSS and the font, with the features I don't use switched off, such as running code from attributes and keeping copies of pages in the browser.
+- **Built, the protection:**
+  - `web/csrf.py`: sessions, the secret code and `protect_against_other_websites()`, which runs for every request, so a new button is protected without having to remember it. Refusals are written to the server's log.
+  - In `web/app.py`: `TrustedHostMiddleware` only answers requests addressed to this computer. Without it, a website could point an address of its own at 127.0.0.1 ("DNS rebinding") and read my pages as if they were its own.
+  - `base.html` gives every HTMX request the code as a header, and the sign-in form has it in a hidden field. A page from before a server restart gets refused, and HTMX reloads it.
+  - `web/static/htmx.min.js`, version 2.0.11, 52 KB. `python-multipart` is now in `requirements.txt`, because the app reads forms itself.
+- **Built, the button and its progress:**
+  - `web/sorting.py`: `start()` begins a run on a second thread, unless one is already going. That thread finds the inbox emails the log doesn't have, and handles them newest first with the same `sort_email()` and `apply_sorted()` as `triage.py`. It makes its own Gmail and database connections, because neither can be shared between threads.
+  - Two new addresses in `web/app.py`: `POST /sort` starts a run and answers straight away, and `GET /sort/status` says how far it is. When the run is over, it tells the page to reload, so the numbers are up to date.
+  - `_sort_button.html` and `_sort_status.html`, pieces of template that every page includes, and that HTMX can also replace by themselves. So opening any page during a run shows the progress and a greyed-out button.
+- **Built, the summary and what happens when things go wrong:**
+  - The summary shows once, on the next page drawn: the numbers, the cost, and the new to-dos by name, up to 5, with a link to Action needed. It's green normally, amber at the spending limit and red if the run had to stop.
+  - `_explain()` in `web/sorting.py` turns errors into words that say what to do, like an ended Gmail login, no internet, or no Claude credit. Anything unexpected only gets its type on the page, because the details could be long or come from an email. They're in the server's log.
+  - The $0.50 limit is checked before each email, and the summary says how many are still new. Skipped emails get a line of their own.
+- **Learned:**
+  - A second thread is the "buzzer": the page can answer straight away while the work goes on. The two sides share one small object, which only the thread writes to.
+  - A thread needs to catch every error itself. If it doesn't, it just ends, and the page says "sorting" forever. So it catches everything, writes the details to the server's log, and reports that the run stopped.
+  - Polling with HTMX is one attribute, `hx-trigger="every 1s"`, and an answer can also update a second part of the page ("out of band"), which is how the click greys out the button in the top bar.
+  - A lock makes checking and starting one step, so two clicks at the same moment can't both start a run.
+  - CSRF: any website can make my browser send a request to my app, with my cookies, even though it can't read the answer. So what protects a button is something only my own pages can know.
+  - The same-origin policy is what makes that work: a page can send a request to another address, but it can't read the answer, so it can't steal the code. In the browser test, that's what blocked the attempt to read my page.
+  - A custom header gives extra protection, because a browser won't send one to another address without asking that server first, and my server doesn't agree.
+  - Comparing secret codes with `secrets.compare_digest` takes the same time wherever the first difference is, so timing can't give a code away.
+  - "Middleware" is code that runs around every request, which makes a protection the default instead of something to remember for each address.
+  - A library isn't automatically the safer choice: it pays to check when it was last updated, and whether its method still matches current advice.
+- **Result:**
+  - HTMX matched its published fingerprints: npm's for the package, and the one in HTMX's docs for the file. The copies from npm and jsDelivr were byte-for-byte the same.
+  - 80 free tests with forged and real requests. 15 kinds of forged request were all refused with nothing happening, such as no code, a guessed code, another session's code, the right code from another website, and `Origin: null`. Real requests work with the code in a form or in a header. A wrong address gets no page. Sessions can't grow without end, and a restart only means reloading the page.
+  - **In a real browser:** a page on another address sent hidden forms and scripts at the sign-in button. The server refused every POST, and the sign-in never started. The browser itself blocked the request with the secret header and the attempt to read my page. Pressing the real button on the app's own page still worked, and so did an HTMX request.
+  - Scripts on the page can't read the session cookie, and the browser loaded nothing from outside.
+  - **The button, 54 free tests with fake emails, fake answers and stand-ins for Gmail:** a click is answered straight away, and the worker can be paused midway to check what the page shows. "Sorting 1 of 4" appears on every page, which all keep working during a run. Pressing again, or 8 clicks at the same moment, still gives one run. A forged click starts nothing. The right emails get archived, and the cost adds up. When the login has ended, Gmail stops answering midway, or Claude can't be reached, it stops, says why and keeps what's done, and an unexpected bug can't leave it stuck on "sorting".
+  - **In a real browser, on a test server with stand-ins:** the progress counted up by itself, the button greyed out, and the page then reloaded with the summary and new numbers. Only the stand-in was asked to change anything.
+  - **The summary, the limit and the errors, 38 more free tests:** it names 5 to-dos and says "and 2 more", repeats none, and a to-do trying to be code shows as plain text. At the limit, it stops once it passes $0.50, and the next press carries on with the rest. 13 kinds of failure each get the right words, and the details of an unexpected bug stay out of the page.
+  - **The real button with my 35 real new emails, on a test server, with stand-ins for every change to Gmail and saved only to a copy of the log:** $0.023 in about 85 seconds, or about 2.4 seconds per email. It sorted them into 9 labels with 17 full reads, all decided by Haiku. 33 would be archived and 2 stay, and the summary named both: a connection request and a low-credit warning, which the new rule now catches. The home page then showed 0 new emails, 35 sorted in the last run, and the new total cost. My real inbox had the same 95 emails before and after, and the real log still has 0 full reads.
+  - In total, 661 free tests pass.
+- **Found:**
+  - **I haven't pressed the real button on my real inbox,** on purpose. That waits for the History page, so the real Gmail changes behind the button have only been tested with stand-ins. The same Gmail code did run for real in Steps 4 and 5.
+  - **A normal day should take about 25 seconds to sort,** at about 10 emails a day. That's short enough that I don't need to read emails at the same time, which would add complexity and risk hitting rate limits.
 
 ## What's left
 
@@ -855,11 +905,11 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - [x] part 2: saving the results in the log, in a table of their own
   - [x] part 3: urgency, shown on the page, to Claude Desktop and on the home page
   - [x] part 4: triage runs the full read for new emails, before deciding what to archive
-- [ ] **Step 7, piece 3:** the "Sort new emails" button, with a summary of what arrived and what needs me
+- [x] **Step 7, piece 3:** the "Sort new emails" button, with a summary of what arrived and what needs me, and protection against other websites pressing the app's buttons
 - [ ] **Step 7, piece 4:** the Unsorted page: approve, edit or reject label suggestions, or pick a label by hand
 - [ ] **Step 7, piece 5:** the History page: past runs, how many emails went to each label, undo, and a "Needs action" button
 - [ ] **Step 7, piece 6:** the draft flow: "Draft reply" with a hints box, the Critic's verdict, and saving to Gmail drafts, also when the Critic isn't satisfied
-- [ ] An archive button for to-dos on the page, so I can clear the overdue ones there instead of in Gmail. A row can hold several conversations, so one click should archive them all. It changes Gmail, so it needs the protection against other websites pressing buttons that piece 3 adds
+- [ ] An archive button for to-dos on the page, so I can clear the overdue ones there instead of in Gmail. A row can hold several conversations, so one click should archive them all. It's protected like every other button, by the protection against other websites that piece 3 added
 - [ ] A double-click shortcut that starts the web page, so opening it doesn't need VS Code
 - [ ] Decide whether to move the Google app from "Testing" to "In production", which would end the weekly sign-in (first check Google's rules for unverified apps that use Gmail)
 - [ ] Reorganize the project into folders, as its own step after Step 7, with one setting for where the data files live
@@ -890,7 +940,7 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 | `check_mcp_server.py` | Starts the MCP server the way an app would, lists its tools and tries the read-only ones |
 | `drafter.py` | The Drafter agent and the Critic: writes a reply to one conversation, reviews it, and saves it as a Gmail draft with `--save` |
 | `style_builder.py` | Builds my writing-style file: `collect` gathers my sent emails, `write` has Claude Opus describe my style |
-| `web/` | Step 7: the web page. `app.py` is the FastAPI app, with one function per page. `templates/` holds the HTML templates: `base.html` is the shared layout with the menu, and each page fills it in. `tailwind.css` tells Tailwind's program what to build, and `static/` holds files sent to the browser as they are: the built CSS and the Inter font |
+| `web/` | Step 7: the web page. `app.py` is the FastAPI app, with one function per page. `templates/` holds the HTML templates: `base.html` is the shared layout with the menu, and each page fills it in. `csrf.py` stops other websites pressing the app's buttons, and `sorting.py` runs the "Sort new emails" button's work on a second thread. `tailwind.css` tells Tailwind's program what to build, and `static/` holds files sent to the browser as they are: the built CSS, the Inter font and HTMX |
 | `profile.example/` | Example versions of my profile files. The real ones are in `profile/`, which isn't in Git |
 | `requirements.txt` | Python packages, with exact versions |
 | `.env.example` | Template for the API key file |

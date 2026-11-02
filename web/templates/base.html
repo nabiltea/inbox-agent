@@ -9,8 +9,14 @@
   {# The CSS that Tailwind's program builds from the classes used in the templates. The ?v=
      fingerprint changes whenever the file does, so browsers fetch the new one (see app.py). #}
   <link rel="stylesheet" href="{{ url_for('static', path='app.css').path }}?v={{ file_version('app.css') }}">
+  {# HTMX updates parts of a page without reloading it. The app serves its own copy (2.0.11, checked
+     against its published fingerprints). The settings switch off what this app doesn't use: running
+     code from attributes, keeping copies of pages in the browser, and a stylesheet of its own. #}
+  <meta name="htmx-config" content='{"allowEval":false,"allowScriptTags":false,"historyCacheSize":0,"includeIndicatorStyles":false,"selfRequestsOnly":true}'>
+  <script src="{{ url_for('static', path='htmx.min.js').path }}?v={{ file_version('htmx.min.js') }}" defer></script>
 </head>
-<body class="min-h-screen bg-blue-100 text-gray-900">
+{# hx-headers makes HTMX send the session's secret code with every request from this page (see web/csrf.py) #}
+<body class="min-h-screen bg-blue-100 text-gray-900" hx-headers='{"X-CSRF-Token": "{{ csrf_token }}"}'>
   {# The top bar, the same on every page. sticky top-0 keeps it in view when the page scrolls. #}
   <header class="sticky top-0 z-10 border-b border-gray-200 bg-white">
     <div class="mx-auto flex max-w-5xl flex-wrap items-center gap-x-8 gap-y-2 px-6 py-3">
@@ -28,18 +34,13 @@
         {% endfor %}
       </nav>
 
-      {# Sorting arrives in piece 3. Until then the button is greyed out and can't be clicked.
-         The hover text sits on the wrapper, because some browsers show none on a disabled button. #}
-      <span class="ml-auto" title="Coming in piece 3">
-        <button type="button" disabled
-                class="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50">
-          Sort new emails
-        </button>
-      </span>
+      {% include "_sort_button.html" %}
     </div>
   </header>
 
   <main class="mx-auto max-w-5xl px-6 py-8">
+    {% include "_sort_status.html" %}
+
     {# A message shown once, after signing in: green when it worked, red when it didn't #}
     {% if message %}
       <div class="mb-6 rounded-lg border px-5 py-4 text-sm {% if message.ok %}border-green-300 bg-green-50 text-green-900{% else %}border-red-300 bg-red-50 text-red-900{% endif %}" role="status">
@@ -65,6 +66,7 @@
         {# A form, so the button sends a POST: starting a sign-in does something (see app.py) #}
         {% if gmail_problem == "sign_in" %}
           <form method="post" action="{{ url_for('sign_in').path }}" class="mt-3">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <button type="submit" class="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">
               Sign in to Gmail
             </button>

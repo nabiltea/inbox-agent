@@ -205,6 +205,13 @@ class SortedEmail:
         return self.read.needs_me == "yes" if self.read else self.flagged
 
     @property
+    def what_to_do(self):
+        """The to-do in one line, for an email that needs me: the same order as todos.py."""
+        if self.read and self.read.what_to_do:
+            return self.read.what_to_do
+        return self.result.action or f"Reply to {self.email.sender}"
+
+    @property
     def archive(self):
         """Whether it leaves the inbox."""
         email = self.email

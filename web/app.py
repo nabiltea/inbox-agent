@@ -3,8 +3,8 @@
 A FastAPI app that runs on my own computer. Each address, like "/", is a Python
 function, and each page is an HTML template in web/templates/ that the function
 fills in. There are three pages, Action needed, Unsorted and History, which share
-one layout with the menu (web/templates/base.html). Action needed lists my to-dos.
-The other two say which piece they arrive in.
+one layout with the menu and the "Sort new emails" button (web/templates/base.html).
+Action needed lists my to-dos. The other two say which piece they arrive in.
 
 Start it from the project folder with:
   python -m uvicorn web.app:app --reload
@@ -29,9 +29,10 @@ from datetime import date, datetime
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 import database
 from gmail_client import (
@@ -47,6 +48,8 @@ from gmail_client import (
     start_web_sign_in,
 )
 from todos import list_todos
+from web import sorting
+from web.csrf import csrf_context, protect_against_other_websites
 
 # This folder (web/). Building paths from this file's own location means they work
 # whatever folder the server is started from.
@@ -58,10 +61,18 @@ WEB_DIR = Path(__file__).parent
 # other programs, so they're switched off.
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
+# Other websites can't press this app's buttons (see web/csrf.py).
+app.middleware("http")(protect_against_other_websites)
+
+# Only answers requests addressed to this computer. A website could otherwise point an address
+# of its own at 127.0.0.1 ("DNS rebinding"), which would let it read my pages as if they were its own.
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])
+
 # The HTML templates live in web/templates/. Jinja2 escapes every value in templates
 # whose names end in .html: a "<" in an email subject is shown as text, so email
-# content can never run as code on the page.
-templates = Jinja2Templates(directory=WEB_DIR / "templates")
+# content can never run as code on the page. Every template gets the session's secret code,
+# and how sorting is going, for the top of every page.
+templates = Jinja2Templates(directory=WEB_DIR / "templates", context_processors=[csrf_context, sorting.sort_context])
 
 # Files sent to the browser as they are, like the CSS: web/static/app.css is served at
 # /static/app.css. Only files inside web/static/ can be reached this way, never the rest
@@ -233,6 +244,25 @@ def unsorted(request: Request):
 def history(request: Request):
     """History: past runs, what was sorted where, and undo. A placeholder until piece 5."""
     return templates.TemplateResponse(request=request, name="history.html", context={"active": "history"})
+
+
+# The "Sort new emails" button. The sorting itself runs on a second thread (see sorting.py).
+@app.post("/sort")
+def start_sorting(request: Request):
+    """Start sorting, unless it's already going, and answer straight away with how it's going."""
+    sorting.start()
+    return templates.TemplateResponse(request=request, name="_sort_started.html", context={})
+
+
+@app.get("/sort/status")
+def sort_status(request: Request):
+    """How sorting is going, which the page asks once a second. When it's over, this tells the page to reload."""
+    run = sorting.current()
+    if run is None or not run.running:
+        return Response(headers={"HX-Refresh": "true"})
+    return templates.TemplateResponse(
+        request=request, name="_sort_status.html", context={}, headers={"Cache-Control": "no-store"}
+    )
 
 
 # Signing in to Gmail from the page. The button sends the browser to Google's sign-in

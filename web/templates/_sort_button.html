@@ -1,0 +1,15 @@
+{# The "Sort new emails" button, always in the top bar. While a run is going, it's greyed out.
+   hx-post sends the click to the server, and the answer replaces the sort-status box.
+   hx-disabled-elt greys it out straight away, so a double click can't send two requests.
+   oob ("out of band"): when the answer to a click also carries this button, HTMX puts it here. #}
+<span id="sort-button" class="ml-auto"{% if oob %} hx-swap-oob="true"{% endif %}>
+  <button type="button"
+          {% if sort_run and sort_run.running %}
+            disabled
+          {% else %}
+            hx-post="{{ url_for('start_sorting').path }}" hx-target="#sort-status" hx-swap="outerHTML" hx-disabled-elt="this"
+          {% endif %}
+          class="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50">
+    {{ "Sorting…" if sort_run and sort_run.running else "Sort new emails" }}
+  </button>
+</span>

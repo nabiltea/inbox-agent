@@ -1,0 +1,57 @@
+{# How sorting is going, at the top of every page. While a run is going, hx-trigger makes this box
+   ask the server for a new copy of itself every second, and hx-swap replaces it with the answer.
+   When the run has finished, the server tells the page to reload, so its numbers are up to date,
+   and this box shows what happened, once. Red if it had to stop, amber at the spending limit. #}
+<div id="sort-status"
+     {% if sort_run and sort_run.running %}hx-get="{{ url_for('sort_status').path }}" hx-trigger="every 1s" hx-swap="outerHTML"{% endif %}>
+  {% if sort_run and sort_run.running %}
+    <div class="mb-6 rounded-lg bg-white px-5 py-4 text-sm shadow-sm" role="status">
+      {% if sort_run.total is none %}
+        <p>Looking for new emails…</p>
+      {% else %}
+        <p>Sorting {{ sort_run.done }} of {{ sort_run.total }} new {{ "email" if sort_run.total == 1 else "emails" }}. You can keep using the page.</p>
+        <progress class="mt-2 h-1.5 w-full accent-blue-600" value="{{ sort_run.done }}" max="{{ sort_run.total }}"></progress>
+      {% endif %}
+    </div>
+  {% elif sort_run and sort_run.total == 0 and not sort_run.problem %}
+    <div class="mb-6 rounded-lg border border-green-300 bg-green-50 px-5 py-4 text-sm text-green-900" role="status">
+      <p>There are no new emails to sort.</p>
+    </div>
+  {% elif sort_run %}
+    <div class="mb-6 rounded-lg border px-5 py-4 text-sm {% if sort_run.problem %}border-red-300 bg-red-50 text-red-900{% elif sort_run.hit_limit %}border-amber-300 bg-amber-50 text-amber-900{% else %}border-green-300 bg-green-50 text-green-900{% endif %}" role="status">
+      {% if sort_run.problem %}
+        {% if sort_run.total is none %}
+          <p>Sorting couldn't start: {{ sort_run.problem }}</p>
+        {% else %}
+          <p>Sorting stopped after {{ sort_run.sorted_count }} of {{ sort_run.total }} new emails: {{ sort_run.problem }}</p>
+          <p class="mt-1">What's sorted is saved, and nothing is lost: the other {{ sort_run.still_new }} {{ "is" if sort_run.still_new == 1 else "are" }} still new.</p>
+        {% endif %}
+      {% elif sort_run.hit_limit %}
+        <p>Sorting stopped at the spending limit of $0.50 for one click. {{ sort_run.still_new }} {{ "email is" if sort_run.still_new == 1 else "emails are" }} still new. Press the button again to carry on.</p>
+      {% endif %}
+      {% if sort_run.sorted_count or not sort_run.problem %}
+        <p{% if sort_run.problem or sort_run.hit_limit %} class="mt-1"{% endif %}>
+          Sorted {{ sort_run.sorted_count }} new {{ "email" if sort_run.sorted_count == 1 else "emails" }}:
+          {{ sort_run.archived }} archived,
+          {{ sort_run.need_me }} {{ "needs" if sort_run.need_me == 1 else "need" }} you,
+          {% if sort_run.unsorted %}{{ sort_run.unsorted }} went to Unsorted{% else %}none went to Unsorted{% endif %}.
+          Cost: {{ "$%.2f"|format(sort_run.cost) }}.
+        </p>
+      {% endif %}
+      {% if sort_run.to_dos %}
+        <ul class="mt-2 list-disc pl-5">
+          {% for to_do in sort_run.to_dos[:5] %}
+            <li>{{ to_do }}</li>
+          {% endfor %}
+          {% if sort_run.to_dos|length > 5 %}
+            <li>and {{ sort_run.to_dos|length - 5 }} more</li>
+          {% endif %}
+        </ul>
+        <p class="mt-2"><a href="{{ url_for('action_needed').path }}" class="underline">Action needed<span aria-hidden="true"> →</span></a></p>
+      {% endif %}
+      {% if sort_run.skipped %}
+        <p class="mt-2">{{ sort_run.skipped }} {{ "email" if sort_run.skipped == 1 else "emails" }} couldn't be read, so {{ "it stays" if sort_run.skipped == 1 else "they stay" }} new and will be tried again next time.</p>
+      {% endif %}
+    </div>
+  {% endif %}
+</div>
