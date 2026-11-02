@@ -26,7 +26,7 @@ from typing import Annotated, Literal
 
 import anthropic
 from dotenv import load_dotenv
-from pydantic import AfterValidator, BaseModel, Field
+from pydantic import AfterValidator, BaseModel, Field, ValidationError
 
 import database
 from gmail_client import get_gmail_service, get_message, inbox_message_ids
@@ -58,6 +58,7 @@ What counts:
 - A reply: a real person is waiting for an answer from me, for example a question or a meeting request. Automated emails never need a reply by email.
 - An action: something I have to do myself, for example sign a document, pay a bill, verify an account, fill in a form, complete an assessment or go to an appointment. If an email only says that a real person sent me a message on another site, like LinkedIn, I have to reply to them on that site.
 - An invitation from a real person: a request to connect, like a LinkedIn connection request (accept or decline it), or a document someone shared with me (open it and accept or decline the invitation). Suggestions of people I might know, and notices that someone accepted my invitation, need nothing.
+- A warning that something I use or pay for will stop working, expire or be closed unless I act, like low credit on an account, or a card or subscription that's about to expire, is an action. Sales and marketing that only sound urgent, like a discount or a free trial ending, need nothing.
 - Information, receipts, delivery updates, newsletters and automatic payments need nothing. Neither do suggestions I could act on if I wanted, like job recommendations or sales.
 - Use today's date: an appointment, event or deadline that has already passed needs nothing.
 
@@ -190,22 +191,32 @@ def _ask(client, model, system, form, text):
         "output_format": form,  # makes Claude answer in exactly this form
     }
     response = _send(client, model, request)
+    if response is None:
+        return None, 0.0
     cost = _cost(response, model)
     if response.parsed_output is not None and _had_invisible(response):
         second = _send(client, model, request)
-        cost += _cost(second, model)
-        if second.parsed_output is not None:
-            response = second
+        if second is not None:
+            cost += _cost(second, model)
+            if second.parsed_output is not None:
+                response = second
     return response.parsed_output, cost
 
 
 def _send(client, model, request):
-    """Sends one request to one model and returns the response."""
-    if model == REVIEWER:
-        # If Sonnet's safety checks ever decline an email, Claude's API retries it on
-        # another suitable model within the same request, instead of giving no answer.
-        return client.beta.messages.parse(**request, betas=["server-side-fallback-2026-07-01"], fallbacks="default")
-    return client.messages.parse(**request)
+    """Sends one request to one model and returns the response, or None if the answer was cut off.
+
+    An answer cut off partway isn't valid JSON, so the SDK raises an error when it reads
+    it. That counts as no usable answer, like a refusal. Its cost is lost with the response.
+    """
+    try:
+        if model == REVIEWER:
+            # If Sonnet's safety checks ever decline an email, Claude's API retries it on
+            # another suitable model within the same request, instead of giving no answer.
+            return client.beta.messages.parse(**request, betas=["server-side-fallback-2026-07-01"], fallbacks="default")
+        return client.messages.parse(**request)
+    except ValidationError:
+        return None
 
 
 def _cost(response, model):
@@ -252,6 +263,12 @@ def print_result(number, total, row, result, model, cost):
     first_look = row["action"] if row["needs_action"] and row["action"] else "reply" if row["needs_reply"] else None
     print(f"[{number}/{total}] {row['label']} · {row['received_at'][:10]} · {row['subject'][:70]}")
     print(f"  First look: {'needs me (' + first_look + ')' if first_look else 'nothing'}")
+    print_read(result, model, cost)
+    print()
+
+
+def print_read(result, model, cost):
+    """Print one full read: the answer, what to do, the steps and why."""
     details = [result.kind, f"by {result.deadline:%a %d %b}" if result.deadline else None,
                "time-sensitive" if result.time_sensitive else None, result.where]
     reader = "Haiku" if model == FIRST_READER else "Sonnet"
@@ -260,7 +277,7 @@ def print_result(number, total, row, result, model, cost):
         print(f"              To do: {result.what_to_do}")
     for step_number, step in enumerate(result.steps, 1):
         print(f"              {step_number}. {step}")
-    print(f"              Why: {result.reason}  (${cost:.4f})\n")
+    print(f"              Why: {result.reason}  (${cost:.4f})")
 
 
 def main():

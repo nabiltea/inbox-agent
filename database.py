@@ -194,14 +194,15 @@ def last_run(conn):
 
 def last_run_summary(conn):
     """The most recent run in numbers: when it started, and how many emails it sorted,
-    archived and flagged as needing me. None if there are no runs yet.
+    archived and left in the inbox as needing me. None if there are no runs yet.
 
-    The full read has the last word, as in flagged_emails(). COALESCE takes its answer, and
-    without a full read (NULL) it takes triage's first look instead.
+    The same rule as flagged_emails(): it has to be still in the inbox, and the full read
+    has the last word. COALESCE takes its answer, and without a full read (NULL) it takes
+    triage's first look instead.
     """
     return conn.execute("""
         SELECT MIN(decisions.processed_at) AS started, COUNT(*) AS emails, SUM(decisions.archived) AS archived,
-               SUM(COALESCE(f.needs_me = 'yes', decisions.needs_reply = 1 OR decisions.needs_action = 1)) AS flagged
+               SUM(decisions.archived = 0 AND COALESCE(f.needs_me = 'yes', decisions.needs_reply = 1 OR decisions.needs_action = 1)) AS flagged
         FROM decisions LEFT JOIN full_reads AS f ON f.message_id = decisions.message_id
         GROUP BY decisions.run_id ORDER BY started DESC LIMIT 1
     """).fetchone()

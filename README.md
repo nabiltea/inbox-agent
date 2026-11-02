@@ -614,7 +614,7 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - 12 tests passed. Through MCP, the way Claude Desktop uses the server: `list_todos` takes no settings, says it's the page's list, is still read-only, and returns the same 26 conversations as the page, in the same order, with the same fields and Gmail links and all 60 flagged emails; two tool calls at the same moment both work. With patches: an expired login gives Claude the sign-in message and no list, the next call after signing in again works without restarting the server, and no internet or a problem at Google gives a clear message.
   - `check_mcp_server.py` lists the 4 tools and gets 26 conversations from `list_todos`. The draft tool was never called, so nothing in Gmail changed.
   - The page's 8 link tests still pass.
-  - **The real thing:** after restarting Claude Desktop, I asked it "what's on my to-do list?". The tool gave Claude the same 26 conversations as the page, and Claude's answer covered all of them, grouped by urgency and topic into 17 bullets (the four Dropbox Sign reminders for one contract became one, for example). For a booking, it suggested using the airline's site rather than the link in the email.
+  - **The real thing:** after restarting Claude Desktop, I asked it "what's on my to-do list?". The tool gave Claude the same 26 conversations as the page, and Claude's answer covered all of them, grouped by urgency and topic into 17 bullets (four reminders for one contract became one, for example). For one to-do, it suggested using the company's own site rather than the link in the email.
 - **Found:**
   - Claude's answer said "24 items" while listing all 26: a counting slip by the model while summarizing. The numbers to trust come from code, like the page's count.
   - Claude pointed out to-dos that are probably done or out of date: an expired one-time code, an old check-in and a past event. They stay on the list until I archive them in Gmail. Piece 2's deadlines and a "Done" button (in What's left) are where that gets better.
@@ -640,11 +640,11 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - Three cards across on the PC, one on a phone, and nothing sticks out sideways.
 - **Found:** 26 emails in my inbox haven't been sorted yet, and the last run was on 26 October. Sorting needs to be easier to start, which is what piece 3's button is for.
 
-**Piece 2: reading the whole email (in progress)**
+**Piece 2: reading the whole email**
 - **Decided:**
   - **Prices checked first:** Claude Haiku 5.5 costs $0.10 / $0.50 per million input / output tokens, and Claude Sonnet 5.5 $2 / $10. Triage already uses Haiku 5.5.
   - **When the full read says a flagged email needs nothing, it's archived,** like any sorted email that doesn't need me. I'm not sorting for real until the History page (piece 5) can undo and rescue, so nothing gets archived before that safety net exists.
-  - **"Where" is only the site's name and web address,** like "Dropbox Sign (dropbox.com)", never a clickable link taken from the email. Links in emails can be phishing, and "Open in Gmail" leads to the real link, with Gmail's own warnings.
+  - **"Where" is only the site's name and web address,** like "Example Site (example.com)", never a clickable link taken from the email. Links in emails can be phishing, and "Open in Gmail" leads to the real link, with Gmail's own warnings.
   - **Overdue to-dos get a gray "Overdue" tag** and sit after the urgent ones, so the top of the list is for things I can still do.
   - **No full read for today's to-dos:** they're all overdue, and I'll clear them with an archive button on the page (in What's left).
   - **Invitations from a real person count as to-dos:** a request to connect, like a LinkedIn connection request, or a document someone shared with me. The rule went into both triage's first look and the full read, which also spell out the look-alikes that need nothing: suggestions of people I might know, and notices that someone accepted my invitation.
@@ -783,6 +783,35 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - **Reading the same email twice can differ in the details.** Across those re-reads, one email's "time-sensitive" went from no to yes, while the decision itself stayed the same. This is what the accuracy tests in Step 8 are for.
   - **Found and fixed: an answer can contain invisible characters.** I first took "alance" in one answer for a typo, because the terminal hid what was wrong. On the page, the same word showed small boxes: Sonnet's text had two backspace control characters, one where the "b" should be and one in the middle of the word, and no "b" at all. It's 1 of the 272 pieces of text in the reads, but it matters beyond looks, because some invisible characters make text display backwards, so a fake address could pass for a real one in the "where" line. The form now removes them from all its text as each answer arrives. Cleaning alone can't bring back a missing letter, and the word read "alance", so when an answer has invisible characters, the reader now asks the same model once more and uses the second answer. A second answer with them would still be cleaned. Re-reading that email for real gave the whole word.
 
+**Piece 2, part 4: triage runs the full read**
+- **Decided:**
+  - **The full read has the last word on what gets archived.** A flagged email whose read says no is archived, and an unflagged one whose read says yes stays in the inbox and joins the list. An email no label fits stays in the inbox either way, for the Unsorted page. The log keeps the first look's answer next to the full read's, so the accuracy tests in Step 8 can compare them.
+  - **Emails older than 30 days get no full read.** They're archived whatever they say, so the answer wouldn't change anything.
+  - **If one email's read fails, that email is skipped and the run carries on.** It stays untouched in the inbox, the next run tries it again, and the summary names it. Stopping would let one odd email block every email after it, on every run. Anything unexpected still stops the run, so a real bug shows up as one.
+  - **A dry run does the full reads too,** so it shows exactly what a real run would do. It skips emails already in the log, or it would pay to read them again.
+  - **The steps live in shared functions,** `sort_email()` and `apply_sorted()`, because the Sort button in piece 3 needs the same steps, the way `todos.py` serves both the page and Claude Desktop.
+  - `backlog.py` stays as it is. The backlog is finished, and if it ever runs again, it uses first looks only.
+  - **A warning that something I use or pay for will stop, expire or close unless I act counts as an action,** in both the first look and the full read. Sales that only sound urgent still don't. Missing one is worse than a false alarm.
+  - **No real information in this README's examples or in the code:** no names, companies, booking or contract names, amounts or dates of real events. They go to GitHub, so examples are generic or left out.
+- **Built:**
+  - In `triage.py`: `sort_email()` decides about one email without changing anything, `apply_sorted()` carries it out in Gmail and the log, and `should_archive()` listens to the full read. The output shows each email's full read and what happens to it, and the summary shows how many reads there were, what they cleared and found, and the cost of the first looks and the reads.
+  - **Found and fixed, in `full_read.py` and `triage.py`:** an answer cut off partway crashed the run. My code's comment said it counted as no usable answer, but the Anthropic package raises an error when it reads broken JSON. Now it's what the comment said: the next model tries, and if neither gives a usable answer, the email counts as needing me.
+  - **Found and fixed, in `database.py`:** the last run's "need you" also counted old emails that were archived anyway, so the card could disagree with the list. It now counts only emails still in the inbox.
+- **Learned:**
+  - A stand-in (a "mock") replaces the code that would change Gmail with code that only notes what it was asked to do, so the real `--apply` path can run on real emails with no risk.
+  - The order of saving matters with a foreign key: the email's row has to exist before its full read can be saved.
+  - Skipping or stopping is a real design choice, and which errors to catch is part of it. Catching only the expected ones keeps real bugs visible.
+- **Result:**
+  - 126 more free tests, with made-up emails and stand-ins for Gmail: every outcome in the plan, a failed read of each type, a run after a failed one, emails already sorted, cut-off answers, undo and `backlog.py`. In total, 489 free tests pass.
+  - **My 34 real new emails, with stand-ins for every change to Gmail, saved only to a copy of the log:** $0.0217, in 80 seconds (about 2.3 seconds per email). 16 got a full read, all decided by Haiku. 33 would be archived and 1 stays: a LinkedIn connection request. My real inbox had 94 emails before and after, and the real log still has 0 full reads.
+  - On a test server, the home page and Action needed show that run: 27 to-dos with the new request on top, 0 new emails, 34 sorted in the last run (33 archived, 1 needs me), and $1.59 in total: $1.58 for sorting and $0.01 for the reads.
+  - **The rule about warnings, on 10 real emails, for $0.0157, with nothing saved:** a low-credit warning and two expiring-password warnings now count as to-dos. An email saying that something ends by itself and needs nothing stayed a no, and so did a free trial ending, a discount, a saved job expiring, a trial offer and two automatic payments. Each email was read as if it were the day after it arrived, so an old warning wasn't dismissed just for being old.
+- **Found:**
+  - **Clear emails are very cheap to read:** $0.0003 each with no Sonnet, against $0.0027 for the old marketplace messages. First looks cost more than I'd assumed, though: $0.0005 each, not $0.00024, because the backlog ran at half price through the Batches API. At about 10 emails a day, sorting should cost about $0.20 to $0.50 a month in total.
+  - **On these emails, the full read changed no decision.** The first look and the read agreed on all 16. What the read added here was what to do, the steps and the place.
+  - **Found and fixed: the reader missed what a warning means.** A warning that an account's credit was running low, and that a service would stop without more, got "no": it read as information, because my rules didn't cover warnings. It would have been archived.
+  - **A date can be in a different email.** A later email from an airline gave the date of a flight, but the to-do came from an earlier email with no date, so the list can't show it as urgent. It's the same limit as above: the reader sees one email at a time.
+
 ## What's left
 
 - [x] **Step 1:** First call to Claude
@@ -821,11 +850,11 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - [x] part 4: an "Open in Gmail" link that names my account
   - [x] part 5: Claude Desktop's `list_todos` uses the same list and connects fresh for every tool call
 - [x] **Step 7, piece 1f:** a home page: what needs me, Unsorted emails, replies waiting to be sent, and what the agent did lately
-- [ ] **Step 7, piece 2:** the full-read step (Haiku, with Sonnet for unsure cases) and urgency, in four parts:
+- [x] **Step 7, piece 2:** the full-read step (Haiku, with Sonnet for unsure cases) and urgency, in four parts:
   - [x] part 1: the full read itself, with a dry run on real emails
   - [x] part 2: saving the results in the log, in a table of their own
   - [x] part 3: urgency, shown on the page, to Claude Desktop and on the home page
-  - [ ] part 4: triage runs the full read for new emails, before deciding what to archive
+  - [x] part 4: triage runs the full read for new emails, before deciding what to archive
 - [ ] **Step 7, piece 3:** the "Sort new emails" button, with a summary of what arrived and what needs me
 - [ ] **Step 7, piece 4:** the Unsorted page: approve, edit or reject label suggestions, or pick a label by hand
 - [ ] **Step 7, piece 5:** the History page: past runs, how many emails went to each label, undo, and a "Needs action" button
@@ -849,7 +878,7 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 | `hello_claude.py` | Step 1: first call to Claude |
 | `gmail_client.py` | All Gmail code: login (also from the web page), fetch emails |
 | `show_inbox.py` | Step 2: prints the 20 newest inbox emails |
-| `triage.py` | Step 3: sorts emails with Claude Haiku, flags replies and actions, suggests labels (dry run) |
+| `triage.py` | Step 3: sorts emails with Claude Haiku, flags replies and actions, and suggests labels. Then runs the full read and decides what to archive. A dry run unless told `--apply` |
 | `full_read.py` | Step 7: reads a whole email and says what exactly to do, where and by when. Claude Haiku first, Claude Sonnet when Haiku is unsure |
 | `label_designer.py` | Step 4: Claude Opus suggests a label set from my inbox and existing labels |
 | `labels.example.json` | A shareable example label set. My real labels are in `labels.json`, which isn't in Git |
