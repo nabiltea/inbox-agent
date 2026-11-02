@@ -4,7 +4,8 @@ Removes the labels the agent added in Gmail during that run, moves the emails it
 archived back into the inbox, and forgets those decisions so the emails get sorted
 again next time. Labels an email already had before the run (for example from my
 own Gmail filters) are left alone. Labels the agent created stay in Gmail, empty,
-so you can delete them by hand if you want.
+so you can delete them by hand if you want. An email I've moved to another label on
+the web page goes back as well, because the log always holds the label it has now.
 
 Run it with:  python undo.py                 undo the most recent run
               python undo.py --list          show all runs

@@ -88,6 +88,9 @@ async def _has_right_code(request):
         return False
     sent = request.headers.get(TOKEN_HEADER)
     if sent is None:
+        # body() first keeps a copy of what was sent. Reading the form on its own would use it
+        # up, and the page's own function would then find the form empty.
+        await request.body()
         sent = (await request.form()).get(TOKEN_FIELD)
     # compare_digest takes the same time wherever the first difference is, so timing can't give the code away.
     return isinstance(sent, str) and secrets.compare_digest(expected.encode(), sent.encode())

@@ -835,7 +835,7 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - `_sort_button.html` and `_sort_status.html`, pieces of template that every page includes, and that HTMX can also replace by themselves. So opening any page during a run shows the progress and a greyed-out button.
 - **Built, the summary and what happens when things go wrong:**
   - The summary shows once, on the next page drawn: the numbers, the cost, and the new to-dos by name, up to 5, with a link to Action needed. It's green normally, amber at the spending limit and red if the run had to stop.
-  - `_explain()` in `web/sorting.py` turns errors into words that say what to do, like an ended Gmail login, no internet, or no Claude credit. Anything unexpected only gets its type on the page, because the details could be long or come from an email. They're in the server's log.
+  - `explain()` in `web/sorting.py` turns errors into words that say what to do, like an ended Gmail login, no internet, or no Claude credit. Anything unexpected only gets its type on the page, because the details could be long or come from an email. They're in the server's log.
   - The $0.50 limit is checked before each email, and the summary says how many are still new. Skipped emails get a line of their own.
 - **Learned:**
   - A second thread is the "buzzer": the page can answer straight away while the work goes on. The two sides share one small object, which only the thread writes to.
@@ -881,24 +881,44 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - **A new label gets checked before it's saved.** Claude writes a suggestion after reading an outside email, and once approved, it joins the instructions for every future email ("stored prompt injection"). So invisible characters come out, it has to fit on one line within a length limit, and what I see is exactly what gets saved.
   - **Only the changed row updates, with HTMX,** so I keep my place in a long list. A new label reloads the page, so every row's dropdown has it.
   - **No preview of each email.** The log doesn't have one, and asking Gmail about every row on each page load isn't practical (see Found below). Open in Gmail is there instead.
-  - **Smaller choices:** one row per email, since only one conversation has two Unsorted emails. A dropdown plus a Move button, so a slip can't change Gmail. Approving moves only that email. A new label counts as non-routine, so its emails get a full read. No selecting many at once, given how few emails arrive after the clean-up.
+  - **Smaller choices:** one row per email, since only one conversation has two Unsorted emails. A dropdown plus a Move button, so a slip can't change Gmail, with the labels in alphabetical order. After a move, the row says what happened until the page is next loaded. Approving moves only that email. A new label counts as non-routine, so its emails get a full read. No selecting many at once, given how few emails arrive after the clean-up.
 - **Built, part 1: the list, read-only:**
   - `unsorted_emails()` in `database.py`: the emails labelled Unsorted, newest first, with whether each one needs me, by the same rule as the to-do list.
   - `unsorted()` in `web/app.py`: asks Gmail once what's in my inbox, gets the emails from the log and splits them into the two groups. When Gmail can't be asked, the log's record of what the agent last did decides, and the page's notice says so.
   - `unsorted.html` draws the groups, and `_unsorted_row.html` one email: subject, sender, date, Claude's reason, the suggestion in full and Open in Gmail. A row is a template of its own, so the buttons coming next can replace one row by itself.
   - `_macros.html`: the coloured tag and the Gmail link moved out of `action.html`, so both pages share them.
+- **Built, part 2: moving an email to a label I already have:**
+  - **First, a backup:** a copy of the log and `labels.json` in `backups/`, because neither is in Git, and this part starts writing to the log from a button. Git ignores the folder, as it holds the same private data.
+  - `label_changes`, the new table in `database.py`. `save_label_change()` writes its row and the new label in `decisions` with one commit, so a crash can't save only one of them.
+  - `move_to_label()` in the new `web/labelling.py` does the work behind the button, in the same order as sorting: first Gmail, then the log. It asks Gmail which labels the email has right now instead of trusting the log, because I may have changed it myself since. That decides whether the label gets added, which undo needs to know, and whether there's an inbox to leave. A lock lets one change run at a time, so two clicks at once can't both change an email.
+  - `current_labels()` in `gmail_client.py` asks for an email's labels and nothing else. `explain_failures()` can now be used outside that file, and it knows a new `EmailGoneError`, for an email deleted from Gmail.
+  - `POST /unsorted/{message_id}/move` in `web/app.py`: the answer replaces the row, and also updates the count at the top ("out of band"). If something goes wrong, the answer only fills the row's own place for a problem, so the label I chose stays selected. When the login has ended, the page reloads, because a row has no room for the sign-in button.
+  - Each row has a dropdown of my labels, read fresh from `labels.json` for every page load, and a Move button that greys out during the click. The dropdown starts on "Choose a label…", and the browser won't send the form until one is chosen.
 - **Learned:**
   - When moving code shouldn't change anything, compare before and after (a "regression test"). I drew Action needed with the committed templates and the new ones, on the same data, and compared the results.
   - A template's escaping isn't the same as Python's `html.escape`: an apostrophe becomes `&#39;` instead of `&#x27;`. Four of my checks first failed on apostrophes, and the page was right. A failing test can be the test's fault, so it pays to find out which before changing anything.
+  - A "transaction" is several writes to a database saved by one commit, so it's all or nothing. To test it, I made the second write fail, and the first one wasn't saved either.
+  - A request's body can only be read once, like a tape that doesn't rewind. A framework can keep a copy, but only if it's asked to (see Found below).
+  - A stand-in can sit low down: mine mimics Gmail's API itself, so the real functions in `gmail_client.py` and the real `undo.py` ran on top of it.
 - **Result:**
   - **66 free tests, on a copy of my real log with stand-ins for Gmail:** all 45 are listed newest first, with descriptions and reasons in full. "Needs you" only shows in the inbox group, and the full read has the last word on it. Gmail gets asked once per page load.
   - When the login has ended, Google can't be reached, or Google has a problem, the page keeps its list and shows the right notice. Text trying to be code shows as plain text in all five places it can appear. An email with no suggestion doesn't say "None", and with no known account there's no link.
   - Action needed came out the same with the old and new templates, on 28 rows, apart from spaces and the secret code.
   - **In a real browser, with made-up emails:** the layout works at desktop and phone width, the page is no wider than a phone, nothing loads from outside, and the console shows no errors.
   - My real log, `labels.json` and `token.json` stayed byte-for-byte the same.
+  - **Part 2, 149 free tests, on a copy of my real log with a stand-in for Gmail's API:**
+    - **The rules:** an old email stays archived. A new one leaves the inbox unless it needs me, and the full read has the last word. An email that already had the label, or that I'd archived myself, is noted as such.
+    - **The log:** a page load adds the new table to an older log and keeps all 6,588 emails. Each move saves one row with the label before and after.
+    - **Clicks:** 8 clicks at the same moment gave one move and one change in Gmail. A second click, a made-up email or a label that isn't mine changes nothing and doesn't reach Gmail.
+    - **Gmail failing:** each of its 3 requests failed in 7 different ways. The row says why, nothing is recorded, and the same click works once Gmail does. An ended login reloads the page, and an email deleted from Gmail gets its own message.
+    - **Other websites:** 6 kinds of forged click were refused, including the right code from another website.
+    - **`undo.py`, with its real code, on what had been moved:** the new label comes off unless the email already had it, Unsorted isn't put back, and emails return to the inbox exactly when they should. The log forgets those emails and their changes, so they get sorted again.
+  - **Part 2, in a real browser, with made-up emails and a stand-in for Gmail:** with no label chosen, nothing gets sent. A click greys out the button, replaces the row and updates the count without reloading the page. "Orders & Payments" arrives intact. When the stand-in failed on purpose, the problem appeared in the row with my choice still selected, and the same click then worked. An ended login reloaded the page with the sign-in button. It all fits at phone width, and the console shows no errors.
 - **Found:**
   - **Gmail refused part of a request for 45 emails at once, at email 37.** `get_emails()` waited a minute and then finished fine. It's harmless, but the Sort button fetches the same way, so with more than about 37 new emails it may sit on "Looking for new emails…" for a minute.
-  - **Open in Gmail hasn't been tried on an archived email.** The link says `#inbox`, and Google doesn't document these links. I'll click one when the History page is up.
+  - **Nothing on this page has run against real Gmail yet,** on purpose. I won't use the page until the History page is up, so the Gmail changes behind Move have only been tested with stand-ins, and the same goes for Open in Gmail on an archived email: the link says `#inbox`, and Google doesn't document these links. They're on the list below.
+  - **A bug from piece 3, found by testing Move:** a plain form that sent its secret code in a hidden field lost all its other fields. Checking the code read the request's form, which used up the body, so the page's own function found the form empty. Nothing had hit this yet: `/sign-in` doesn't read its form, and Move sends the code as a header. It now keeps a copy of the body first, a one-line fix in `web/csrf.py`.
+  - **A rare gap:** if the log can't be written after Gmail has already changed, the page says the move didn't finish, and the same click finishes it. But the log then notes that the email already had the label, so undoing its run would leave the label on. Sorting has the same order and the same gap, and a failed write to this small file is very unlikely.
 
 ## What's left
 
@@ -946,7 +966,7 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 - [x] **Step 7, piece 3:** the "Sort new emails" button, with a summary of what arrived and what needs me, and protection against other websites pressing the app's buttons
 - [ ] **Step 7, piece 4:** the Unsorted page: approve, edit or reject label suggestions, or pick a label by hand, in five parts:
   - [x] part 1: the list of emails waiting for a label, read-only
-  - [ ] part 2: move an email to a label I already have, recorded in the log
+  - [x] part 2: move an email to a label I already have, recorded in the log
   - [ ] part 3: reject a suggestion
   - [ ] part 4: read the labels at the start of each run, so a new label works without a restart
   - [ ] part 5: approve or edit a suggestion, which adds the new label to Gmail and `labels.json`
@@ -984,12 +1004,12 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 | `check_mcp_server.py` | Starts the MCP server the way an app would, lists its tools and tries the read-only ones |
 | `drafter.py` | The Drafter agent and the Critic: writes a reply to one conversation, reviews it, and saves it as a Gmail draft with `--save` |
 | `style_builder.py` | Builds my writing-style file: `collect` gathers my sent emails, `write` has Claude Opus describe my style |
-| `web/` | Step 7: the web page. `app.py` is the FastAPI app, with one function per page. `templates/` holds the HTML templates: `base.html` is the shared layout with the menu, and each page fills it in. `csrf.py` stops other websites pressing the app's buttons, and `sorting.py` runs the "Sort new emails" button's work on a second thread. `tailwind.css` tells Tailwind's program what to build, and `static/` holds files sent to the browser as they are: the built CSS, the Inter font and HTMX |
+| `web/` | Step 7: the web page. `app.py` is the FastAPI app, with one function per page. `templates/` holds the HTML templates: `base.html` is the shared layout with the menu, and each page fills it in. `csrf.py` stops other websites pressing the app's buttons, `sorting.py` runs the "Sort new emails" button's work on a second thread, and `labelling.py` changes an email's label behind the Unsorted page's buttons. `tailwind.css` tells Tailwind's program what to build, and `static/` holds files sent to the browser as they are: the built CSS, the Inter font and HTMX |
 | `profile.example/` | Example versions of my profile files. The real ones are in `profile/`, which isn't in Git |
 | `requirements.txt` | Python packages, with exact versions |
 | `.env.example` | Template for the API key file |
 
-Not in Git: `.env` (API key), `credentials.json` (Google app file), `token.json` (saved Gmail login), `labels_proposed.json` (label suggestions that quote my real emails), `labels.json` (my labels, whose descriptions name companies I applied to), `inbox_agent.db` (the log of my emails and decisions), `backlog_batch.json` (which batch is waiting, deleted after use), `style_source_emails.json` (my sent emails, collected for the writing-style file), `profile/` (my writing-style and about-me files), `.claude/` (settings for testing the web page in the Claude app), `tools/` (Tailwind's program, 112 MB), `web/static/app.css` (the CSS that Tailwind's program builds), `.venv/` (Python environment).
+Not in Git: `.env` (API key), `credentials.json` (Google app file), `token.json` (saved Gmail login), `labels_proposed.json` (label suggestions that quote my real emails), `labels.json` (my labels, whose descriptions name companies I applied to), `inbox_agent.db` (the log of my emails and decisions), `backups/` (copies of the log and my labels), `backlog_batch.json` (which batch is waiting, deleted after use), `style_source_emails.json` (my sent emails, collected for the writing-style file), `profile/` (my writing-style and about-me files), `.claude/` (settings for testing the web page in the Claude app), `tools/` (Tailwind's program, 112 MB), `web/static/app.css` (the CSS that Tailwind's program builds), `.venv/` (Python environment).
 
 ## Setup
 

@@ -124,7 +124,7 @@ def _sort_new_emails(run):
                 run.done += 1
     except Exception as error:
         log.exception("Sorting stopped after %s emails", run.done)
-        run.problem = _explain(error)
+        run.problem = explain(error)
     finally:
         run.running = False
 
@@ -145,8 +145,8 @@ def _sort_one(client, service, conn, run_id, label_ids, email, run):
             run.to_dos.append(sorted_email.what_to_do)
 
 
-def _explain(error):
-    """Why a run stopped, in words for the page that say what to do about it.
+def explain(error):
+    """What went wrong behind a button, in words for the page that say what to do about it.
 
     Anything else gets no details on the page, because they could be long or come from an
     email. They're in the server's log.

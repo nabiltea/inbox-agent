@@ -78,6 +78,10 @@ class WrongAccountError(SignInFailedError):
     """Someone signed in with a different Google account than the one the saved login belongs to."""
 
 
+class EmailGoneError(RuntimeError):
+    """The email isn't in Gmail any more, for example because I deleted it."""
+
+
 # The messages that go with the first three errors, wherever they're raised.
 _LOGIN_EXPIRED = (
     "The Gmail login has expired. Sign in again with the 'Sign in to Gmail' button on the web page, "
@@ -197,9 +201,9 @@ def inbox_message_ids(service):
     """The IDs of all the emails in my inbox right now, as a set.
 
     For the web page. When the request fails, this raises one of this file's own errors,
-    so the page can say why (see _explain_failures).
+    so the page can say why (see explain_failures).
     """
-    with _explain_failures():
+    with explain_failures():
         return set(list_message_ids(service, label_id="INBOX"))
 
 
@@ -273,7 +277,7 @@ def _is_temporary(error):
 
 
 @contextmanager
-def _explain_failures():
+def explain_failures():
     """Turn Google's errors during a request into this file's own errors.
 
     Used around the requests the web page makes, so it can say what went wrong without
@@ -287,6 +291,8 @@ def _explain_failures():
             raise GoogleTemporaryError(_GOOGLE_TEMPORARY) from error
         if error.resp.status == 401:  # Gmail no longer accepts the login
             raise SignInNeededError(_LOGIN_EXPIRED) from error
+        if error.resp.status == 404:  # Gmail doesn't know this email
+            raise EmailGoneError("This email isn't in Gmail any more.") from error
         raise
     except RefreshError as error:  # the short-lived access key needed renewing, and that failed
         if _is_temporary_refusal(error):
@@ -320,6 +326,12 @@ def get_or_create_labels(service, names):
             ids[name] = created["id"]
             print(f"Created label in Gmail: {name}", file=sys.stderr)
     return {name: ids[name] for name in names}
+
+
+def current_labels(service, message_id):
+    """The IDs of the labels one email has right now, including Gmail's own like INBOX."""
+    # format="minimal" asks only for the email's ID and labels, not the email itself.
+    return service.users().messages().get(userId="me", id=message_id, format="minimal").execute().get("labelIds", [])
 
 
 def change_labels(service, message_id, add=(), remove=()):

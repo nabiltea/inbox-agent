@@ -4,8 +4,8 @@ A FastAPI app that runs on my own computer. Each address, like "/", is a Python
 function, and each page is an HTML template in web/templates/ that the function
 fills in. There are three pages, Action needed, Unsorted and History, which share
 one layout with the menu and the "Sort new emails" button (web/templates/base.html).
-Action needed lists my to-dos, and Unsorted the emails that fit no label. History says
-which piece it arrives in.
+Action needed lists my to-dos, and Unsorted the emails that fit no label, which I can
+move to one of my labels. History says which piece it arrives in.
 
 Start it from the project folder with:
   python -m uvicorn web.app:app --reload
@@ -24,12 +24,14 @@ rebuilds the CSS every time a file is saved. (A public site would add --minify.)
 """
 
 import hashlib
+import logging
 import mimetypes
 from contextlib import closing
 from datetime import date, datetime
 from pathlib import Path
+from typing import Annotated
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Form, Request
 from fastapi.responses import RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -37,6 +39,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 import database
 from gmail_client import (
+    EmailGoneError,
     GoogleTemporaryError,
     GoogleUnreachableError,
     SignInFailedError,
@@ -49,8 +52,11 @@ from gmail_client import (
     start_web_sign_in,
 )
 from todos import list_todos
-from web import sorting
+from triage import load_labels
+from web import labelling, sorting
 from web.csrf import csrf_context, protect_against_other_websites
+
+log = logging.getLogger("uvicorn.error")
 
 # This folder (web/). Building paths from this file's own location means they work
 # whatever folder the server is started from.
@@ -259,11 +265,50 @@ def unsorted(request: Request):
             "active": "unsorted",
             "in_inbox": [email for email in emails if in_my_inbox(email)],
             "older": [email for email in emails if not in_my_inbox(email)],
+            "labels": sorted(load_labels(), key=str.lower),  # for each row's dropdown, read fresh for every page load
             # For the "Open in Gmail" links, the same as on Action needed
             "gmail_address": saved_account(),
             "gmail_problem": gmail_problem,  # None, or why Gmail couldn't be checked
             "message": _waiting.pop("message", None),  # shown once, after signing in
         },
+    )
+
+
+# The Move button on a row of the Unsorted page. The answer normally replaces the row
+# (see _unsorted_row.html).
+@app.post("/unsorted/{message_id}/move")
+def move_email(request: Request, message_id: str, label: Annotated[str, Form()] = ""):
+    """Move an Unsorted email to a label I already have, and show how it went in its row."""
+    try:
+        moved = labelling.move_to_label(message_id, label)
+    except SignInNeededError:
+        # A row has no room for the sign-in button, so the page reloads and shows its notice.
+        return Response(headers={"HX-Refresh": "true"})
+    except labelling.NoSuchLabelError:
+        return row_problem(request, message_id, "Not moved: choose a label from the list.")
+    except EmailGoneError as error:
+        return row_problem(request, message_id, f"Not moved: {error}")
+    except Exception as error:
+        log.exception("Couldn't finish moving an email")
+        return row_problem(request, message_id, f"Couldn't finish moving this email: {sorting.explain(error)}")
+    with closing(database.connect()) as conn:
+        total = database.unsorted_count(conn)
+    return templates.TemplateResponse(
+        request=request, name="_unsorted_moved.html", context={"moved": moved, "total": total}
+    )
+
+
+def row_problem(request, message_id, problem):
+    """Show what went wrong inside a row of the Unsorted page, leaving the rest of the row as it is.
+
+    HX-Reswap: none tells HTMX not to replace the row with this answer. It only puts the
+    problem in its place in the row ("out of band"), so the label I chose stays selected.
+    """
+    return templates.TemplateResponse(
+        request=request,
+        name="_unsorted_problem.html",
+        context={"message_id": message_id, "problem": problem},
+        headers={"HX-Reswap": "none"},
     )
 
 

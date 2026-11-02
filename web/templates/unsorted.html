@@ -1,5 +1,5 @@
-{# The Unsorted page: the emails that fit no label, each with the label it suggests. For now it
-   only lists them. It fills the slots in base.html, which draws the rest. #}
+{# The Unsorted page: the emails that fit no label, each with the label it suggests and a way to
+   move it to one of my labels. It fills the slots in base.html, which draws the rest. #}
 {% extends "base.html" %}
 
 {% block title %}Unsorted · {% endblock %}
@@ -13,9 +13,7 @@
   {% set total = in_inbox|length + older|length %}
   <div class="flex items-baseline gap-3">
     <h1 class="text-2xl font-semibold">Unsorted</h1>
-    {% if total %}
-      <span class="text-sm text-gray-600">{{ total }} {{ "email" if total == 1 else "emails" }} waiting for a label</span>
-    {% endif %}
+    {% include "_unsorted_count.html" %}
   </div>
 
   {% if total %}

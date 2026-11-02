@@ -77,6 +77,28 @@ def connect():
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(full_reads)")}
     if "what_to_do" not in columns:
         conn.execute("ALTER TABLE full_reads ADD COLUMN what_to_do TEXT")
+
+    # Every change I make to an email's label by hand. It works like a bank account:
+    # decisions always holds the label now, the balance, so everything that reads it
+    # stays right, and this table is the statement, with one row per change. That also
+    # keeps Claude's first answer, which the accuracy tests in Step 8 can compare with mine.
+    # action says what I did, like "picked". The last three columns are what undoing one
+    # change will need: whether the agent had added the old label, whether this change
+    # added the new one (not if the email already had it), and whether it took the email
+    # out of the inbox. ON DELETE CASCADE works as it does for full_reads above.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS label_changes (
+            id INTEGER PRIMARY KEY,
+            message_id TEXT REFERENCES decisions(message_id) ON DELETE CASCADE,
+            changed_at TEXT,
+            action TEXT,
+            old_label TEXT,
+            new_label TEXT,
+            old_label_added INTEGER,
+            new_label_added INTEGER,
+            left_inbox INTEGER
+        )
+    """)
     # SQLite only enforces links between tables (like the one above) when this is
     # switched on, and only for this connection, so it's switched on every time.
     conn.execute("PRAGMA foreign_keys = ON")
@@ -213,17 +235,49 @@ def unsorted_count(conn):
     return conn.execute("SELECT COUNT(*) FROM decisions WHERE label = 'Unsorted'").fetchone()[0]
 
 
-def unsorted_emails(conn):
-    """The emails that fit no label, newest first, each with whether it needs me (needs_me).
+# The emails that fit no label, each with whether it needs me (needs_me). The same rule as
+# flagged_emails(): the full read has the last word, and without one, triage's first look.
+_UNSORTED_EMAILS = """
+    SELECT decisions.*, COALESCE(f.needs_me = 'yes', decisions.needs_reply = 1 OR decisions.needs_action = 1) AS needs_me
+    FROM decisions LEFT JOIN full_reads AS f ON f.message_id = decisions.message_id
+    WHERE decisions.label = 'Unsorted'
+"""
 
-    The same rule as flagged_emails(): the full read has the last word, and without one, triage's first look.
+
+def unsorted_emails(conn):
+    """The emails that fit no label, newest first, each with whether it needs me."""
+    return conn.execute(f"{_UNSORTED_EMAILS} ORDER BY decisions.received_at DESC").fetchall()
+
+
+def unsorted_email(conn, message_id):
+    """One email that fits no label, with whether it needs me. None if the log has no such email."""
+    return conn.execute(f"{_UNSORTED_EMAILS} AND decisions.message_id = ?", (message_id,)).fetchone()
+
+
+def save_label_change(conn, message_id, action, label, label_added, left_inbox):
+    """Record that I changed an email's label: a new row in label_changes, and the new label in decisions.
+
+    label_added is False when the email already had that label. left_inbox is True when this
+    change took the email out of the inbox, which also counts as archived, so undoing its run
+    brings it back. One commit saves both (a "transaction"), so a crash can't save only one.
     """
-    return conn.execute("""
-        SELECT decisions.*, COALESCE(f.needs_me = 'yes', decisions.needs_reply = 1 OR decisions.needs_action = 1) AS needs_me
-        FROM decisions LEFT JOIN full_reads AS f ON f.message_id = decisions.message_id
-        WHERE decisions.label = 'Unsorted'
-        ORDER BY decisions.received_at DESC
-    """).fetchall()
+    old = conn.execute("SELECT label, label_added FROM decisions WHERE message_id = ?", (message_id,)).fetchone()
+    conn.execute(
+        """
+        INSERT INTO label_changes (
+            message_id, changed_at, action, old_label, new_label, old_label_added, new_label_added, left_inbox
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            message_id, datetime.now().isoformat(timespec="seconds"), action,
+            old["label"], label, old["label_added"], label_added, left_inbox,
+        ),
+    )
+    conn.execute(
+        "UPDATE decisions SET label = ?, label_added = ?, archived = archived OR ? WHERE message_id = ?",
+        (label, label_added, left_inbox, message_id),
+    )
+    conn.commit()
 
 
 def sorting_costs(conn, since):

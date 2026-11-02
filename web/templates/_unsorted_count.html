@@ -1,0 +1,5 @@
+{# How many emails are waiting, at the top of the Unsorted page. oob ("out of band"): when the
+   answer to a click also carries this, HTMX puts it here, as with the Sort button. #}
+<span id="unsorted-count" class="text-sm text-gray-600"{% if oob %} hx-swap-oob="true"{% endif %}>
+  {% if total %}{{ total }} {{ "email" if total == 1 else "emails" }} waiting for a label{% endif %}
+</span>

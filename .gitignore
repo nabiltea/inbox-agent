@@ -11,6 +11,9 @@ labels.json
 # The agent's log of every email it handled (senders, subjects, decisions)
 inbox_agent.db
 
+# Copies of the log and my labels, made before changing how they're written. Same private data.
+backups/
+
 # My own sent emails, collected to learn my writing style
 style_source_emails.json
 
