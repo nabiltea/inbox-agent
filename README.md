@@ -698,7 +698,7 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
     - **The link holds:** a full read for an email the log doesn't know was refused, and undoing a run removed its full reads, with none left behind.
   - The real log only got the new, empty table: 6,588 emails and 0 full reads. The pages and Claude Desktop's list are unchanged, with 26 conversations.
 
-**Piece 2, part 3: urgency, on the page and for Claude Desktop (in progress)**
+**Piece 2, part 3: urgency, on the page and for Claude Desktop**
 - **Decided:**
   - **Urgency is worked out fresh and never saved,** like storing a birthday and calculating an age. The log keeps the deadline, and the recipe in `todos.py` compares it with today on every page load. A deadline on the 10th is normal on the 2nd and turns urgent on the 8th by itself. A saved urgency would go out of date overnight.
   - **Due today, tomorrow or the day after is urgent.** On 2 November, that means 2, 3 and 4 November. A deadline of today isn't overdue yet.
@@ -716,23 +716,32 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
     - **Nothing disappears.** The row says "+4 more emails", and its fold lists the task's other conversations, each with its date, its line and its own "Open in Gmail". A to-do stays until I archive it, so I need to be able to reach all of them. This also covers the rule's one risk: two different documents from one person, with no dates, would share a row, but both are listed.
     - **The list counts "to-dos" now, not "conversations",** on both pages, because a row can hold several conversations.
     - Without a full read there's no kind, so nothing merges: my real page keeps its 26 rows for now.
-  - **Urgent counts** go on Action needed and on the home page's first card, and **the cost card** becomes one total with a small split between sorting and full reads.
+  - **Urgent counts** go on Action needed and on the home page's first card, and only when there are some.
+  - **The cost card** becomes one total, "Claude's cost this month", with a small split between sorting and full reads once there are any full reads. It only knows what's in the log: reading an email again replaces its earlier cost, and undoing a run removes its costs. The 60 test reads show as $0.16, while the reads and re-reads really cost $0.20. In normal use, each email is read once.
+  - **How many emails went to each label stays off the home page.** I'd wanted the last run's card to show this, but a normal day has about 5 labels and a run after a gap had 13, which either stretches the cards or hides some behind a click. The home page answers "does anything need me, and is the agent working?", and the split doesn't change what I do next. It goes on the History page (piece 5), and since the log stores each email's run and label, nothing is lost by waiting.
   - **`list_todos()` is told today's date,** like the two lists it's already given. Normally it uses the computer's date, but a test can ask what the list will look like on 9 November without waiting until then.
   - **The test on real data comes with the page,** reading all 60 flagged emails on a copy of the log, rather than only the newest email per conversation, so the date rule above can be seen on real conversations.
-- **Built so far, the recipe and the log:**
+- **Built, the recipe and the log:**
   - `what_to_do` on the form in `full_read.py`, printed by the dry run. When neither model answers, it says "Check this email yourself".
   - In `database.py`: a `what_to_do` column in `full_reads`, added by a small migration, which `save_full_read()` fills in and `flagged_emails()` reads. A log made before this gets the column the first time it's opened, and a new one is created with it, in the same position.
   - In `todos.py`: the new fields on `Todo` (kind, steps, place, why, deadline and urgency), `_urgency()` and `_position()`. The full read's kind now decides between reply and action, which fixes the empty tags for an email only the full read flagged.
-- **Built so far, the Action needed page:**
+- **Built, the Action needed page:**
   - `action.html`: a tag for how pressing a to-do is (a red "Urgent", a red outline for "Time-sensitive", a gray "Overdue"), a tag for its kind, a line with the date and place, the steps and the "why" in a fold, and urgent and overdue counts next to the heading. A small macro draws the tags.
   - `show_deadline()` in `web/app.py`: "Due today", "Due tomorrow", "Due Tue 10 Nov" or "Was due Fri 6 Nov". The tag column got wider so "Time-sensitive" fits. That and the word "to-dos" are the only changes on the real page while the log has no full reads.
-- **Built so far, each task once:**
+- **Built, each task once:**
   - `_one_row_per_task()` and `_same_task()` in `todos.py`, which run after the conversations have their rows, and a small `OtherConversation` for each merged conversation.
   - The "Also about this" list in the fold in `action.html`, with one macro for every "Open in Gmail" link. The links now stay in one piece instead of breaking across lines.
-- **Built so far, safer answers from the reader, in `full_read.py`:**
+- **Built, safer answers from the reader, in `full_read.py`:**
   - The rule against copying payment details, in the reader's instructions. It adds 91 input tokens to each read, about 1 cent a month.
   - `remove_invisible()` and a `CleanText` type for the form's text boxes. Claude still sees a plain form, and the cleaning happens as the answer arrives.
   - `_ask()` asks the same model once more when an answer had invisible characters, and adds up the cost of both requests. Line breaks and tabs don't count, because cleaning only turns those into spaces.
+- **Built, Claude Desktop's list, in `gmail_mcp_server.py`:**
+  - `list_todos` now gives the same rows in the same order as the page, with the kind, steps, place, why, deadline and urgency, and each of a task's other conversations with its own Gmail link. Dates become text, because a tool's answer travels as JSON, which has no dates.
+  - Its description, which is what Claude reads, explains the urgency words and says to use them as they are. It also says never to offer the place or the steps as links, because links in emails can be phishing, and that `gmail_link` is the way to the real link.
+- **Built, the home page:**
+  - The first card shows "2 urgent · 1 overdue" when there are some, with the urgent part in red.
+  - `last_run_summary()` in `database.py` now lets the full read have the last word, the same rule as the to-do list, so "12 need you" can't disagree with the list once part 4 runs.
+  - `full_read_costs()` in `database.py`, which the cost card adds to the sorting costs.
 - **Learned:**
   - A value that can be calculated usually shouldn't be stored, because the stored copy can go out of date. Here it would be wrong by the next morning.
   - A function that looks at the clock by itself is hard to test. Handing it the date as an input makes it easy, and it's the same reason `list_todos()` is handed its two lists.
@@ -741,6 +750,7 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - `<details>` gives a fold with no JavaScript, and a Jinja macro is a reusable piece of template, like a function.
   - A price estimate is only as good as its sample. One measured average from a different mix of emails can be off by a factor of three.
   - Text can hold characters you can't see. Unicode files them under "other", and some can make text display backwards. Checking a page in the browser found what the terminal had hidden.
+  - In SQL, a comparison with an empty value (NULL) gives NULL rather than no, and adding up nothing but NULLs gives NULL rather than 0. `COALESCE` handles both, so a run with nothing flagged says 0 instead of showing "None need you".
   - A Pydantic validator can clean a value as it arrives, without changing the form the model is shown.
   - Fake replies can test every path of a retry, like a second answer that also fails, without paying for it or waiting for a rare glitch. They can't prove it works with a real reply, so one real read is still worth it.
 - **Result:**
@@ -760,7 +770,9 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
     - **The cleaning:** 38 more free tests, including a raw answer with backspaces and a backwards-text character, run through the Anthropic SDK's own parsing the way a real answer arrives. On the 272 pieces of text in the real reads, only the one with backspaces changed, and text with €, ®, accents, Japanese, Arabic and emoji stayed as it was.
     - **On a test server,** today's list starts with three time-sensitive rows, then a to-do with a real date. Pretending it was the day before that date turned it urgent by itself ("Due tomorrow"). Three other dates were planted to show the other states, like a "Was due" date on a gray Overdue row. Every link in the list goes to Gmail, and nothing sticks out sideways on a phone.
     - **Asking again:** 57 more free tests with made-up replies, built from the Anthropic package's own types, for both models. It asks again for invisible characters in any text box, stops after two requests, adds up the cost, keeps the first answer if the second is unusable, and doesn't ask again for line breaks, €, Japanese or emoji. One real read of an email ($0.008) went through Haiku and Sonnet without a problem and came back clean.
-  - **In total,** 277 free tests pass, and the paid tests cost $0.203: $0.163 for the 60 reads and $0.040 for re-reading a few emails.
+    - **Claude Desktop's list:** 43 more free tests over real MCP, the way Claude Desktop uses the server, with the real server on copies of the log. It gave the same 13 to-dos in the same order as the page, on today's date and on a pretend 9 November, with dates as text and 19 different Gmail links. `read_thread` works with another conversation's ID. With no full reads, it's the same 26 entries, newest first, with those fields empty. It's still 4 tools and read-only. This doesn't show how Claude itself uses the new fields: Claude Desktop reads my real log, which has no full reads until part 4.
+    - **The home page:** 35 more free tests. With no full reads, it shows the same numbers as before (26 to-dos, 24 actions, 5 replies, 99 sorted, 87 archived, 12 need you). With the real reads, it shows 13 to-dos, 7 actions and 6 replies, and "$1.73 in total: $1.57 for sorting 6,588 emails, $0.16 for 60 full reads". A full read's no takes one off the last run's "need you", and a yes adds one. Pretending it was 9 November showed "2 urgent · 1 overdue", matching Action needed, and with only one of them there's no stray dot.
+  - **In total,** 355 free tests pass, and the paid tests cost $0.203: $0.163 for the 60 reads and $0.040 for re-reading a few emails.
 - **Found:**
   - **The new box costs more than I estimated.** Token counting, which is free, shows it adds 152 input tokens to each read, because the form's text is sent with every request. With a short answer and Sonnet's reviews, that comes to about 1.5 cents a month at 5 reads a day, rather than the fifth of a cent I'd worked out by counting only the answer. That's still well within budget.
   - **The test cost almost three times my estimate:** $0.163 instead of about $0.06. Sonnet reviewed 23 of the 60 emails, against 4 of 31 in part 1, and those 23 took 90% of the spending. 17 of those 23 were very short messages from old second-hand sales, where Haiku couldn't tell what was still open. Without those, a read cost about $0.002. At 5 reads a day, that's about $0.30 to $0.40 a month rather than $0.15, still under the $0.50 to $1 first estimated.
@@ -812,11 +824,11 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 - [ ] **Step 7, piece 2:** the full-read step (Haiku, with Sonnet for unsure cases) and urgency, in four parts:
   - [x] part 1: the full read itself, with a dry run on real emails
   - [x] part 2: saving the results in the log, in a table of their own
-  - [ ] part 3: urgency, shown on the page and to Claude Desktop, and on the home page: urgent counts, the cost card, and how many emails the last run put in each label
+  - [x] part 3: urgency, shown on the page, to Claude Desktop and on the home page
   - [ ] part 4: triage runs the full read for new emails, before deciding what to archive
 - [ ] **Step 7, piece 3:** the "Sort new emails" button, with a summary of what arrived and what needs me
 - [ ] **Step 7, piece 4:** the Unsorted page: approve, edit or reject label suggestions, or pick a label by hand
-- [ ] **Step 7, piece 5:** the History page: past runs, undo, and a "Needs action" button
+- [ ] **Step 7, piece 5:** the History page: past runs, how many emails went to each label, undo, and a "Needs action" button
 - [ ] **Step 7, piece 6:** the draft flow: "Draft reply" with a hints box, the Critic's verdict, and saving to Gmail drafts, also when the Critic isn't satisfied
 - [ ] An archive button for to-dos on the page, so I can clear the overdue ones there instead of in Gmail. A row can hold several conversations, so one click should archive them all. It changes Gmail, so it needs the protection against other websites pressing buttons that piece 3 adds
 - [ ] A double-click shortcut that starts the web page, so opening it doesn't need VS Code

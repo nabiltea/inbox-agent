@@ -194,11 +194,16 @@ def last_run(conn):
 
 def last_run_summary(conn):
     """The most recent run in numbers: when it started, and how many emails it sorted,
-    archived and flagged as needing me. None if there are no runs yet."""
+    archived and flagged as needing me. None if there are no runs yet.
+
+    The full read has the last word, as in flagged_emails(). COALESCE takes its answer, and
+    without a full read (NULL) it takes triage's first look instead.
+    """
     return conn.execute("""
-        SELECT MIN(processed_at) AS started, COUNT(*) AS emails, SUM(archived) AS archived,
-               SUM(needs_reply = 1 OR needs_action = 1) AS flagged
-        FROM decisions GROUP BY run_id ORDER BY started DESC LIMIT 1
+        SELECT MIN(decisions.processed_at) AS started, COUNT(*) AS emails, SUM(decisions.archived) AS archived,
+               SUM(COALESCE(f.needs_me = 'yes', decisions.needs_reply = 1 OR decisions.needs_action = 1)) AS flagged
+        FROM decisions LEFT JOIN full_reads AS f ON f.message_id = decisions.message_id
+        GROUP BY decisions.run_id ORDER BY started DESC LIMIT 1
     """).fetchone()
 
 
@@ -217,6 +222,19 @@ def sorting_costs(conn, since):
     ).fetchone()
     total = conn.execute("SELECT COUNT(*), COALESCE(SUM(cost), 0) FROM decisions").fetchone()
     return {"emails_since": recent[0], "cost_since": recent[1], "emails": total[0], "cost": total[1]}
+
+
+def full_read_costs(conn, since):
+    """What full reads have cost in dollars, and how many there were: since the given date, and in total.
+
+    Like sorting_costs(), it only knows what's in the log: reading an email again replaces
+    its earlier cost, and undoing a run removes its costs.
+    """
+    recent = conn.execute(
+        "SELECT COUNT(*), COALESCE(SUM(cost), 0) FROM full_reads WHERE read_at >= ?", (since.isoformat(),)
+    ).fetchone()
+    total = conn.execute("SELECT COUNT(*), COALESCE(SUM(cost), 0) FROM full_reads").fetchone()
+    return {"reads_since": recent[0], "cost_since": recent[1], "reads": total[0], "cost": total[1]}
 
 
 def delete_run(conn, run_id):

@@ -168,6 +168,7 @@ def home(request: Request):
         new = None if inbox_ids is None else sum(not database.is_processed(conn, i) for i in inbox_ids)
         last_run = database.last_run_summary(conn)
         costs = database.sorting_costs(conn, since=month_start)
+        read_costs = database.full_read_costs(conn, since=month_start)
         unsorted = database.unsorted_count(conn)
     return templates.TemplateResponse(
         request=request,
@@ -175,6 +176,8 @@ def home(request: Request):
         context={
             "active": "home",  # no menu item has this name, so none is highlighted
             "need_you": len(todos),
+            "urgent": sum(todo.urgency == "urgent" for todo in todos),
+            "overdue": sum(todo.urgency == "overdue" for todo in todos),
             "actions": sum(todo.needs_action for todo in todos),
             "replies": sum(todo.needs_reply for todo in todos),
             "new": new,
@@ -182,6 +185,9 @@ def home(request: Request):
             "last_run": last_run,
             "last_run_date": datetime.fromisoformat(last_run["started"]) if last_run else None,
             "costs": costs,
+            "read_costs": read_costs,
+            "cost_this_month": costs["cost_since"] + read_costs["cost_since"],
+            "cost_total": costs["cost"] + read_costs["cost"],
             "gmail_problem": gmail_problem,  # None, or why Gmail couldn't be checked
             "message": _waiting.pop("message", None),  # shown once, after signing in
         },

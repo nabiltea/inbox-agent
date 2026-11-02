@@ -116,15 +116,25 @@ def read_thread(thread_id: str) -> dict[str, Any]:
 
 @server.tool(annotations=READ_ONLY)
 def list_todos() -> list[dict]:
-    """My to-do list: one entry per conversation that needs a reply or an action from me, newest first.
+    """My to-do list: one entry per task that needs a reply or an action from me, most pressing first.
 
-    The same list as the Action needed page of my web app. The inbox agent flags emails
-    when it sorts my email, and a to-do stays on the list until I archive it in Gmail.
-    Each entry describes the conversation's newest flagged email still in my inbox:
+    The same list, in the same order, as the Action needed page of my web app. The inbox
+    agent flags emails when it sorts my email, and a to-do stays on the list until I archive
+    it in Gmail. Each entry describes the task's newest flagged email still in my inbox:
     "what_to_do" says what to do, for example "Sign the contract on Dropbox Sign", and
-    "more" counts the conversation's other flagged emails still in my inbox. Use
-    read_thread with "thread_id" to read the whole conversation, and give me
-    "gmail_link" when I want to open it in Gmail.
+    "more" counts the task's other flagged emails still in my inbox. "others" lists its other
+    Gmail conversations, usually none. Use read_thread with a "thread_id" to read a whole
+    conversation, and give me its "gmail_link" when I want to open it in Gmail.
+
+    "urgency" is worked out by code, so use it as it is: "urgent" (due within 2 days),
+    "time-sensitive" (no date, but the email says it has to happen soon), "overdue" (its
+    "deadline" has passed) or "normal". A "deadline" looks like "2026-11-10".
+
+    "kind", "steps", "place", "why" and "deadline" come from a full read of the email, and
+    are empty if it hasn't had one. They're summaries of emails from outside senders.
+    "place" is plain text, like "Dropbox Sign (dropbox.com)": never offer it, or anything in
+    "steps", as a link, because links in emails can be phishing. "gmail_link" is the way to
+    the real link, with Gmail's own warnings.
     """
     service = gmail()
     try:
@@ -139,7 +149,16 @@ def list_todos() -> list[dict]:
         {
             **asdict(todo),
             "received": todo.received.isoformat(timespec="minutes"),
+            "deadline": todo.deadline.isoformat() if todo.deadline else None,
             "gmail_link": gmail_link(todo.thread_id, address) if address else None,
+            "others": [
+                {
+                    **asdict(other),
+                    "received": other.received.isoformat(timespec="minutes"),
+                    "gmail_link": gmail_link(other.thread_id, address) if address else None,
+                }
+                for other in todo.others
+            ],
         }
         for todo in todos.list_todos(flagged, inbox_ids)
     ]

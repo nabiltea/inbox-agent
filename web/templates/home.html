@@ -18,7 +18,17 @@
     <div class="flex flex-col rounded-lg bg-white p-5 shadow-sm">
       <p class="text-3xl font-semibold">{{ need_you }}</p>
       <p class="mt-1 font-medium">{{ "to-do needs" if need_you == 1 else "to-dos need" }} you</p>
-      <p class="mt-1 text-sm text-gray-500">{{ actions }} need an action, {{ replies }} need a reply</p>
+      {# Only there when something is urgent or overdue #}
+      {% if urgent or overdue %}
+        <p class="mt-1 text-sm text-gray-500">
+          {% if urgent %}<span class="font-medium text-red-700">{{ urgent }} urgent</span>{% endif %}
+          {% if urgent and overdue %}·{% endif %}
+          {% if overdue %}{{ overdue }} overdue{% endif %}
+        </p>
+      {% endif %}
+      <p class="mt-1 text-sm text-gray-500">
+        {{ actions }} {{ "needs" if actions == 1 else "need" }} an action, {{ replies }} {{ "needs" if replies == 1 else "need" }} a reply
+      </p>
       <a href="{{ url_for('action_needed').path }}" class="mt-auto pt-3 text-sm text-blue-600 hover:underline">
         Action needed<span aria-hidden="true"> →</span>
       </a>
@@ -65,10 +75,16 @@
     </div>
 
     <div class="flex flex-col rounded-lg bg-white p-5 shadow-sm">
-      <p class="text-3xl font-semibold">{{ "$%.2f"|format(costs.cost_since) }}</p>
-      <p class="mt-1 font-medium">sorting cost this month</p>
+      <p class="text-3xl font-semibold">{{ "$%.2f"|format(cost_this_month) }}</p>
+      <p class="mt-1 font-medium">Claude's cost this month</p>
+      {# The split only appears once there are full reads: until then, it's all sorting #}
       <p class="mt-1 text-sm text-gray-500">
-        {{ "$%.2f"|format(costs.cost) }} in total, for {{ "{:,}".format(costs.emails) }} emails
+        {% if read_costs.reads %}
+          {{ "$%.2f"|format(cost_total) }} in total: {{ "$%.2f"|format(costs.cost) }} for sorting {{ "{:,}".format(costs.emails) }} emails,
+          {{ "$%.2f"|format(read_costs.cost) }} for {{ "{:,}".format(read_costs.reads) }} full {{ "read" if read_costs.reads == 1 else "reads" }}
+        {% else %}
+          {{ "$%.2f"|format(cost_total) }} in total, for {{ "{:,}".format(costs.emails) }} emails
+        {% endif %}
       </p>
     </div>
 
