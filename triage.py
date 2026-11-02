@@ -17,6 +17,8 @@ what they cost. Emails already in the log are skipped either way.
 
 import argparse
 import json
+import os
+import threading
 from collections import Counter
 from contextlib import closing
 from dataclasses import dataclass
@@ -61,14 +63,42 @@ LABELS_FILE = PROJECT_DIR / "labels.json"
 EXAMPLE_LABELS_FILE = PROJECT_DIR / "labels.example.json"
 
 
+# One at a time, because Windows refuses to replace a file while it's being read.
+_labels_file_in_use = threading.Lock()
+
+
+def _read_labels_file():
+    path = LABELS_FILE if LABELS_FILE.exists() else EXAMPLE_LABELS_FILE
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 def load_labels():
     """Read the labels from labels.json, or from the example file if there's none yet.
 
     Returns a dictionary of label name -> description.
     """
-    path = LABELS_FILE if LABELS_FILE.exists() else EXAMPLE_LABELS_FILE
-    data = json.loads(path.read_text(encoding="utf-8"))
+    with _labels_file_in_use:
+        data = _read_labels_file()
     return {label["name"]: label["description"] for label in data["labels"]}
+
+
+def add_label(name, description):
+    """Add a label to labels.json, in a way that a crash can't leave half a file.
+
+    The new version goes to a temporary file first, and one move then swaps it in (an
+    "atomic write"). This matters because labels.json isn't in Git, so a broken one couldn't
+    be restored from there. fsync makes sure the new version has really reached the disk
+    before it replaces the old one.
+    """
+    with _labels_file_in_use:
+        data = _read_labels_file()
+        data["labels"].append({"name": name, "description": description})
+        temporary = LABELS_FILE.with_name(f"{LABELS_FILE.name}.tmp")
+        with open(temporary, "w", encoding="utf-8") as file:
+            file.write(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(temporary, LABELS_FILE)
 
 
 # Used when no label fits. These emails come with a suggested new label for me to approve.

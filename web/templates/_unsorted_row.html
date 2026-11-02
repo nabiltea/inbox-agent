@@ -1,7 +1,14 @@
 {# One email on the Unsorted page: what it is, why it fits no label, the label it suggests, and
-   what I can do about it. The suggestion is written out in full, because it's what I'd be approving.
-   Everything here is escaped, as on every page (see app.py). #}
+   what I can do about it. The suggestion is written out in full and cleaned as it would be saved
+   (see labelling.py), because what I see is what I'd be approving. Everything here is escaped, as
+   on every page (see app.py). #}
 {% from "_macros.html" import open_in_gmail, tag %}
+{% set suggested_name = email.suggested_label|clean %}
+{% set suggested_description = email.suggested_description|clean %}
+{# After I approve a name on another row, it isn't a new label for this row any more. #}
+{% set already_mine = my_labels.get(suggested_name|lower) %}
+{% set button_style = "rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-800 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50" %}
+{% set box_style = "rounded-md border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900" %}
 <li class="px-5 py-4">
   <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
     <p class="min-w-0 font-medium">{{ email.subject }}</p>
@@ -9,27 +16,53 @@
   </div>
   <p class="mt-0.5 text-sm text-gray-500">{{ email.sender }} · {{ email.received_at|show_logged_date }}</p>
   <p class="mt-1 text-sm text-gray-600">Why: {{ email.reason }}</p>
-  {% if email.suggested_label %}
-    <div class="mt-2 border-l-2 border-gray-200 pl-3 text-sm">
-      <p>Suggested new label: <span class="font-medium">{{ email.suggested_label }}</span></p>
-      <p class="mt-0.5 text-gray-600">{{ email.suggested_description }}</p>
-    </div>
-  {% endif %}
+  <div class="mt-2 border-l-2 border-gray-200 pl-3 text-sm">
+    {% if already_mine %}
+      <p>Suggested label: <span class="font-medium">{{ already_mine }}</span>, which you have now.</p>
+    {% elif suggested_name %}
+      <p>Suggested new label: <span class="font-medium">{{ suggested_name }}</span></p>
+      <p class="mt-0.5 text-gray-600">{{ suggested_description }}</p>
+    {% endif %}
+    {# <details> is a fold the browser handles by itself, as on Action needed. If a click on its
+       button doesn't work, the row stays as it is, so what I typed stays too. #}
+    <details class="mt-1">
+      <summary class="cursor-pointer text-gray-600 hover:text-gray-900">{{ "Edit" if suggested_name and not already_mine else "Make a new label" }}</summary>
+      <form hx-post="{{ url_for('edit_suggestion', message_id=email.message_id).path }}" hx-target="closest li" hx-swap="outerHTML" hx-disabled-elt="find button"
+            class="mt-2 flex max-w-xl flex-col gap-2">
+        <label class="flex flex-col gap-1 text-gray-600">
+          Name
+          <input name="name" value="{{ '' if already_mine else suggested_name }}" required maxlength="{{ max_name }}" class="{{ box_style }}">
+        </label>
+        <label class="flex flex-col gap-1 text-gray-600">
+          What kind of email it's for. Claude reads this for every future email.
+          <textarea name="description" required maxlength="{{ max_description }}" rows="3" class="{{ box_style }}">{{ '' if already_mine else suggested_description }}</textarea>
+        </label>
+        <div><button type="submit" class="{{ button_style }}">Approve</button></div>
+      </form>
+    </details>
+  </div>
   <div class="mt-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
     {# hx-post sends the click or the form to the server, and hx-target says the answer replaces this
        whole row. hx-disabled-elt greys out the button straight away, so a double click can't send two
        requests. required makes the browser refuse to send the form until a label is chosen. #}
-    {% set button_style = "rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-800 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50" %}
     <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
+      {# This button saves Claude's words as they are, so it hides while the Edit fold is open (the
+         last class). Otherwise I could change the words, then press this one and lose them. #}
+      {% if suggested_name %}
+        <button type="button" hx-post="{{ url_for('approve_suggestion', message_id=email.message_id).path }}" hx-target="closest li" hx-swap="outerHTML" hx-disabled-elt="this"
+                class="{{ button_style }} [li:has(details[open])_&]:hidden">
+          {{ "Move to " ~ already_mine if already_mine else "Approve" }}
+        </button>
+      {% endif %}
       <button type="button" hx-post="{{ url_for('reject_suggestion', message_id=email.message_id).path }}" hx-target="closest li" hx-swap="outerHTML" hx-disabled-elt="this"
               class="{{ button_style }}">
-        {{ "Reject" if email.suggested_label else "No label needed" }}
+        {{ "Reject" if suggested_name else "No label needed" }}
       </button>
       <form hx-post="{{ url_for('move_email', message_id=email.message_id).path }}" hx-target="closest li" hx-swap="outerHTML" hx-disabled-elt="find button"
             class="flex flex-wrap items-center gap-2">
         <label class="flex flex-wrap items-center gap-2 text-sm text-gray-600">
           or move to
-          <select name="label" required class="rounded-md border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900">
+          <select name="label" required class="{{ box_style }}">
             <option value="">Choose a label…</option>
             {% for label in labels %}
               <option>{{ label }}</option>

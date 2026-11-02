@@ -82,11 +82,12 @@ def connect():
     # decisions always holds the label now, the balance, so everything that reads it
     # stays right, and this table is the statement, with one row per change. That also
     # keeps Claude's first answer, which the accuracy tests in Step 8 can compare with mine.
-    # action says what I did: "picked" a label, or "rejected" the suggestion, which keeps
-    # the email under Unsorted. The last three columns are what undoing one change will
-    # need: whether the agent had added the old label, whether this change
-    # added the new one (not if the email already had it), and whether it took the email
-    # out of the inbox. ON DELETE CASCADE works as it does for full_reads above.
+    # action says what I did: "picked" one of my labels, "approved" the suggestion, "edited"
+    # it before approving, or "rejected" it, which keeps the email under Unsorted. The last
+    # four columns are what undoing one change will need: whether the agent had added the
+    # old label, whether this change added the new one (not if the email already had it),
+    # whether it took the email out of the inbox, and whether it added the label itself to
+    # labels.json. ON DELETE CASCADE works as it does for full_reads above.
     conn.execute("""
         CREATE TABLE IF NOT EXISTS label_changes (
             id INTEGER PRIMARY KEY,
@@ -97,9 +98,14 @@ def connect():
             new_label TEXT,
             old_label_added INTEGER,
             new_label_added INTEGER,
-            left_inbox INTEGER
+            left_inbox INTEGER,
+            label_created INTEGER DEFAULT 0
         )
     """)
+    # label_created came after this table did. The same kind of migration as above.
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(label_changes)")}
+    if "label_created" not in columns:
+        conn.execute("ALTER TABLE label_changes ADD COLUMN label_created INTEGER DEFAULT 0")
     # SQLite only enforces links between tables (like the one above) when this is
     # switched on, and only for this connection, so it's switched on every time.
     conn.execute("PRAGMA foreign_keys = ON")
@@ -265,24 +271,25 @@ def unsorted_email(conn, message_id):
     return conn.execute(f"{_UNSORTED_EMAILS} AND decisions.message_id = ?", (message_id,)).fetchone()
 
 
-def save_label_change(conn, message_id, action, label, label_added, left_inbox):
+def save_label_change(conn, message_id, action, label, label_added, left_inbox, label_created=False):
     """Record that I changed an email's label: a new row in label_changes, and the new label in decisions.
 
     label_added is False when the email already had that label. left_inbox is True when this
     change took the email out of the inbox, which also counts as archived, so undoing its run
-    brings it back. One commit saves both (a "transaction"), so a crash can't save only one.
-    Rejecting a suggestion goes the same way, with the label staying the same.
+    brings it back. label_created is True when this change added the label to labels.json.
+    One commit saves both (a "transaction"), so a crash can't save only one. Rejecting a
+    suggestion goes the same way, with the label staying the same.
     """
     old = conn.execute("SELECT label, label_added FROM decisions WHERE message_id = ?", (message_id,)).fetchone()
     conn.execute(
         """
         INSERT INTO label_changes (
-            message_id, changed_at, action, old_label, new_label, old_label_added, new_label_added, left_inbox
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            message_id, changed_at, action, old_label, new_label, old_label_added, new_label_added, left_inbox, label_created
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             message_id, datetime.now().isoformat(timespec="seconds"), action,
-            old["label"], label, old["label_added"], label_added, left_inbox,
+            old["label"], label, old["label_added"], label_added, left_inbox, label_created,
         ),
     )
     conn.execute(

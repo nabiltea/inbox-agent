@@ -82,6 +82,10 @@ class EmailGoneError(RuntimeError):
     """The email isn't in Gmail any more, for example because I deleted it."""
 
 
+class LabelRefusedError(RuntimeError):
+    """Gmail won't have a label with this name, for example because the name is reserved for its own use."""
+
+
 # The messages that go with the first three errors, wherever they're raised.
 _LOGIN_EXPIRED = (
     "The Gmail login has expired. Sign in again with the 'Sign in to Gmail' button on the web page, "
@@ -313,19 +317,47 @@ def list_labels(service):
     ]
 
 
+def _create_label(service, name):
+    """Make a new label in Gmail and return its ID."""
+    created = service.users().labels().create(
+        userId="me",
+        body={"name": name, "labelListVisibility": "labelShow", "messageListVisibility": "show"},
+    ).execute()
+    print(f"Created label in Gmail: {name}", file=sys.stderr)
+    return created["id"]
+
+
 def get_or_create_labels(service, names):
     """Return {label name: label ID} for the given names, creating any that don't exist in Gmail yet."""
     response = service.users().labels().list(userId="me").execute()
     ids = {label["name"]: label["id"] for label in response.get("labels", [])}
     for name in names:
         if name not in ids:
-            created = service.users().labels().create(
-                userId="me",
-                body={"name": name, "labelListVisibility": "labelShow", "messageListVisibility": "show"},
-            ).execute()
-            ids[name] = created["id"]
-            print(f"Created label in Gmail: {name}", file=sys.stderr)
+            ids[name] = _create_label(service, name)
     return {name: ids[name] for name in names}
+
+
+def create_label_if_missing(service, name):
+    """Make a label in Gmail, unless I already have one with this name. Returns the name as Gmail spells it.
+
+    Google's docs don't say whether capitals count in a label's name, so here a name that
+    differs only in capitals counts as the same one. Gmail's own labels, like INBOX, can't be
+    used, and neither can the other names it keeps for itself: its docs say the list of those
+    isn't complete, so its answer decides. It refuses with 400 "Invalid label name", or 409
+    when a name clashes with a label it has.
+    """
+    for label in service.users().labels().list(userId="me").execute().get("labels", []):
+        if label["name"].lower() == name.lower():
+            if label["type"] != "user":
+                raise LabelRefusedError("Gmail keeps that name for itself. Choose another one.")
+            return label["name"]
+    try:
+        _create_label(service, name)
+    except HttpError as error:
+        if error.resp.status in (400, 409):
+            raise LabelRefusedError("Gmail doesn't accept that name. Choose another one.") from error
+        raise
+    return name
 
 
 def current_labels(service, message_id):

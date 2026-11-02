@@ -3,9 +3,7 @@
 <li class="px-5 py-4 text-sm text-gray-600" role="status">
   {% if changed %}
     <p class="font-medium text-gray-900">{{ changed.subject }}</p>
-    <p class="mt-0.5">
-      {% if changed.label %}Moved to {{ changed.label }}{% else %}Rejected: no label needed, so it won't be listed here again{% endif %}{% if changed.left_inbox %}, and it left your inbox{% elif changed.still_needs_me %}. It stays in your inbox because it needs you{% endif %}.
-    </p>
+    <p class="mt-0.5">{{ what_happened }}</p>
   {% else %}
     <p>This email isn't waiting for a label any more.</p>
   {% endif %}

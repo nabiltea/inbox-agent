@@ -7,6 +7,7 @@ token.json
 # label descriptions name companies I applied to. labels.example.json is shared instead.
 labels_proposed.json
 labels.json
+labels.json.tmp
 
 # The agent's log of every email it handled (senders, subjects, decisions)
 inbox_agent.db

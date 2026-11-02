@@ -4,8 +4,8 @@ A FastAPI app that runs on my own computer. Each address, like "/", is a Python
 function, and each page is an HTML template in web/templates/ that the function
 fills in. There are three pages, Action needed, Unsorted and History, which share
 one layout with the menu and the "Sort new emails" button (web/templates/base.html).
-Action needed lists my to-dos, and Unsorted the emails that fit no label, which I can
-move to one of my labels or say need none. History says which piece it arrives in.
+Action needed lists my to-dos, and Unsorted the emails that fit no label, where I decide
+what happens to each one's suggested label. History says which piece it arrives in.
 
 Start it from the project folder with:
   python -m uvicorn web.app:app --reload
@@ -42,6 +42,7 @@ from gmail_client import (
     EmailGoneError,
     GoogleTemporaryError,
     GoogleUnreachableError,
+    LabelRefusedError,
     SignInFailedError,
     SignInNeededError,
     finish_web_sign_in,
@@ -147,6 +148,7 @@ def show_deadline(deadline):
 templates.env.filters["show_date"] = show_date
 templates.env.filters["show_logged_date"] = show_logged_date
 templates.env.filters["show_deadline"] = show_deadline
+templates.env.filters["clean"] = labelling.clean
 
 
 # Lets the templates call gmail_link(...) from gmail_client.py directly, the way they
@@ -258,6 +260,7 @@ def unsorted(request: Request):
         # Gmail knows what's in my inbox right now. When it can't be asked, the log says what the agent last did.
         return not email["archived"] if inbox_ids is None else email["message_id"] in inbox_ids
 
+    labels = sorted(load_labels(), key=str.lower)  # read fresh for every page load
     return templates.TemplateResponse(
         request=request,
         name="unsorted.html",
@@ -265,7 +268,10 @@ def unsorted(request: Request):
             "active": "unsorted",
             "in_inbox": [email for email in emails if in_my_inbox(email)],
             "older": [email for email in emails if not in_my_inbox(email)],
-            "labels": sorted(load_labels(), key=str.lower),  # for each row's dropdown, read fresh for every page load
+            "labels": labels,  # for each row's dropdown
+            "my_labels": {label.lower(): label for label in labels},  # to spot a suggestion I already have as a label
+            "max_name": labelling.MAX_NAME,
+            "max_description": labelling.MAX_DESCRIPTION,
             # For the "Open in Gmail" links, the same as on Action needed
             "gmail_address": saved_account(),
             "gmail_problem": gmail_problem,  # None, or why Gmail couldn't be checked
@@ -282,10 +288,39 @@ def move_email(request: Request, message_id: str, label: Annotated[str, Form()] 
     return change_row(request, message_id, lambda: labelling.move_to_label(message_id, label))
 
 
+@app.post("/unsorted/{message_id}/approve")
+def approve_suggestion(request: Request, message_id: str):
+    """Give an Unsorted email the label it suggests, as it stands."""
+    return change_row(request, message_id, lambda: labelling.approve_suggestion(message_id))
+
+
+@app.post("/unsorted/{message_id}/edit")
+def edit_suggestion(
+    request: Request, message_id: str, name: Annotated[str, Form()] = "", description: Annotated[str, Form()] = ""
+):
+    """Give an Unsorted email a new label, with the name and description from the row's Edit fold."""
+    return change_row(request, message_id, lambda: labelling.approve_suggestion(message_id, edited=(name, description)))
+
+
 @app.post("/unsorted/{message_id}/reject")
 def reject_suggestion(request: Request, message_id: str):
     """Say that an Unsorted email needs no label, and show how it went in its row."""
     return change_row(request, message_id, lambda: labelling.reject_suggestion(message_id))
+
+
+def what_happened(changed):
+    """What a button did to an email, in a sentence for the page."""
+    if changed.label is None:
+        text = "Rejected: no label needed, so it won't be listed here again"
+    elif changed.label_created:
+        text = f"Added the new label {changed.label} and moved this email there"
+    else:
+        text = f"Moved to {changed.label}"
+    if changed.left_inbox:
+        return f"{text}, and it left your inbox."
+    if changed.still_needs_me:
+        return f"{text}. It stays in your inbox because it needs you."
+    return f"{text}."
 
 
 def change_row(request, message_id, change):
@@ -299,13 +334,21 @@ def change_row(request, message_id, change):
         return row_problem(request, message_id, "Not moved: choose a label from the list.")
     except EmailGoneError as error:
         return row_problem(request, message_id, f"Not moved: {error}")
+    except (labelling.BadLabelError, LabelRefusedError) as error:
+        return row_problem(request, message_id, f"Not saved: {error}")
     except Exception as error:
         log.exception("Couldn't finish changing an email")
         return row_problem(request, message_id, f"Couldn't finish: {sorting.explain(error)}")
+    if changed and changed.label_created:
+        # Every row's dropdown needs the new label, so the page reloads, and says once what happened.
+        _waiting["message"] = {"ok": True, "text": f"{changed.subject}: {what_happened(changed)}"}
+        return Response(headers={"HX-Refresh": "true"})
     with closing(database.connect()) as conn:
         total = database.unsorted_count(conn)
     return templates.TemplateResponse(
-        request=request, name="_unsorted_changed.html", context={"changed": changed, "total": total}
+        request=request,
+        name="_unsorted_changed.html",
+        context={"changed": changed, "what_happened": what_happened(changed) if changed else None, "total": total},
     )
 
 
