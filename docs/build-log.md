@@ -1,0 +1,1119 @@
+# Build log
+
+How I built Inbox Agent, step by step: what I decided and why, what I built and learned, the results, and what's left. [Back to the README](../README.md).
+
+## Progress log
+
+### Step 1: First call to Claude
+- **Built:** `hello_claude.py` sends Claude a sample email and asks for a category, whether it needs a reply, and why.
+- **Learned:** what an API call contains (model, system prompt, messages, effort), why the reply comes as a list of blocks, and how tokens determine cost.
+- **Result:** correct answer ("Friends, needs reply") for about $0.002.
+
+### Step 2: Connect to Gmail
+- **Built:** `gmail_client.py` holds all the Gmail code (login, fetching emails, converting them into a simple `Email` object). `show_inbox.py` prints the 20 newest inbox emails.
+- **Learned:** how OAuth login works (my password never reaches the app; it gets an access token and a refresh token, saved in `token.json`), scopes, and the Gmail API's two-step pattern (list email IDs, then fetch each email's details).
+- **Notes:** while the Google app is in testing mode, Google ends the login every 7 days. The code notices and opens the browser to sign in again.
+
+### Step 3: Triage (dry run)
+- **Built:** `triage.py` sorts the 20 newest emails into 7 starter labels with Claude Haiku 5.5, and flags which need a reply. It only prints the results.
+- **Learned:** structured outputs with Pydantic, system prompts versus user messages, effort levels, and prompt injection.
+- **Result:** 20 emails sorted for $0.0026, about 13 cents per 1,000 emails. Every label was sensible. None were marked as needing a reply, which is correct, because all 20 were automated emails.
+- **Found:** two similar career-advice newsletters got different labels ("Job Alerts" and "Promotions"), because neither description said where newsletters belong. This led to the decision that label descriptions need care, and that the agent should suggest labels rather than create them.
+- **Ideas from review:** a "needs action" flag for emails that need me to do something rather than reply (sign a contract, verify an account), and an "Unsorted" label with suggestions for emails that fit no label.
+
+### Step 3b: Triage upgrade (needs action, Unsorted)
+- **Built:** triage now also returns `needs_action` with a short to-do (`action`), and can choose "Unsorted" with a `suggested_label` and `suggested_description`. It prints a summary at the end (emails per label, how many need a reply or action), and `python triage.py 50` sorts more than 20 emails.
+- **Learned:** optional fields in structured outputs (`str | None`), `Field` descriptions that act as instructions for each field, writing prompt rules for edge cases, and `if __name__ == "__main__"` so the web page can reuse `triage()` later.
+- **Result:** on the 50 newest emails, all 8 real actions were found: a contract to sign (and its reminder), an account to verify, and five LinkedIn messages from a recruiter. Two emails went to Unsorted with sensible suggestions for new labels. Cost: $0.0111 for 50 emails, about 22 cents per 1,000. That's up from 13 cents because the prompt and the answer are longer.
+- **Found:**
+  - A first test gave inconsistent results for LinkedIn "X just messaged you" emails: one marked as needing a reply, two marked as nothing. These are automated notifications, and the reply happens on LinkedIn, not by email. A new prompt rule fixed it: a message from a real person on another site counts as an **action** (reply on that site), not an email reply. After the fix, all five were consistent.
+  - LinkedIn sent five separate notifications for the same conversation, which gave five identical to-dos. The web page should group to-dos from the same conversation.
+  - Career newsletters are still split between "Job Alerts" and "Promotions". That gets fixed with label descriptions in Step 4.
+
+### Step 4a: Label Designer
+- **Built:** `label_designer.py` reads the 200 newest inbox emails plus 5 examples from each label I made in Gmail, and asks Claude Opus 5.5 (effort high) to design a label set. It saves the suggestion to `labels_proposed.json` for me to review, and prints it with example emails for each label and notes on decisions I should check. `gmail_client.py` gained `list_labels()`, and `list_recent_emails()` can now read any label, not just the inbox.
+- **Learned:** streaming (receiving a long answer piece by piece so the connection doesn't time out), giving each email a number so the model can point to examples instead of copying them, and asking the model to list its own uncertain decisions.
+- **Result:** 12 suggested labels for $0.32, read from 210 emails. They include my LinkedIn and Indeed alert labels, plus Applications, LinkedIn Updates, University, Events, Orders & Payments, Security & Logins, Promotions and a "Job Alerts" label for other job boards. The descriptions are specific: they name typical senders and say where borderline emails go, such as career newsletters and job-application login codes.
+- **Found:**
+  - **The model got a fact wrong.** It marked "Job Alerts" as one of my existing labels, but no such label exists. Fix: the code now checks this itself against the real Gmail labels.
+  - **Labels made by a mail app.** Gmail has two labels I didn't make myself, `[Imap]/Drafts` and `Junk Email`, probably created when my Gmail was connected to a mail app like Outlook. Both are empty. Because the prompt said to keep every existing label, the model invented new meanings for them. They should be left out.
+  - **No "Personal" label.** The sample had almost no emails from real people, so the model didn't create one. But emails from real people are rare and important, so a Personal label is probably still worth having.
+  - **The descriptions contain personal details:** companies I applied to and a recruiter's name. That's why the label files stay out of Git.
+
+### Step 4b: Final labels, and triage uses them
+- **Decided:** left out `[Imap]/Drafts` and `Junk Email`, so voucher mail goes to Promotions. Kept a separate "Job Alerts" label for job boards other than LinkedIn and Indeed. Kept LinkedIn messages from real people in "LinkedIn Updates", because they already appear on the to-do list. Added a "Personal" label for emails from people I know.
+- **Built:** `labels.json` holds my 11 final labels with their descriptions. It's kept out of Git, and `labels.example.json` is a shareable version with generic descriptions. `triage.py` now reads its labels from `labels.json`, or from the example file if there's none yet, so nothing about my labels is hard-coded anymore.
+- **Result:** on the 50 newest emails:
+  - **No email went to Unsorted.** In the last run, two did, and both now have a label (University, and LinkedIn Updates).
+  - **Career newsletters are now consistent.** Each one follows the rule in its label's description: LinkedIn's goes to LinkedIn Updates, Indeed's tips go to Indeed Alerts, and the university career portal goes to University.
+  - **All 8 actions were found again:** 3 contract-signing emails and 5 LinkedIn messages.
+  - **Cost:** $0.0173, or about 35 cents per 1,000 emails. That's up from 22 cents, because the longer label descriptions are sent with every email.
+- **Learned:** keeping settings in a data file instead of in code, and the `.env` / `.env.example` pattern applied to personal data (a private file plus a shareable example).
+- **Idea:** triage sends the same system prompt with every email, so prompt caching (a discount for repeating the same text) could cut the cost. Worth checking whether the prompt is long enough to qualify.
+
+### Step 4c: Applying labels in Gmail
+- **Built:**
+  - `gmail_client.py`: `get_or_create_labels()` creates any missing labels in Gmail, `add_label()` and `remove_label()` change one email's labels, and each `Email` now knows which labels it already has.
+  - `database.py`: a SQLite log with one row per email: the decision, the reason, the cost, the run it belonged to, and whether the agent actually added the label.
+  - `triage.py --apply`: applies the labels and logs each decision, and skips emails that are already in the log. `undo.py` reverses the last run.
+- **Learned:** SQLite and SQL basics (`CREATE TABLE`, `INSERT`, `SELECT`, `DELETE`), why queries use `?` placeholders (to stop SQL injection), `argparse` for command-line options, and checking an action's real effect instead of trusting the script's own output.
+- **Result:**
+  - The first run created 10 new labels in Gmail and labeled the 10 newest emails, for $0.0035.
+  - A check read each email back from Gmail: 10 of 10 had their label, and all were still in the inbox.
+  - `undo.py` removed all 10 labels, which was again checked in Gmail, and relabeling put them back.
+  - A second run skipped all 10 emails as already sorted, without calling Claude.
+- **Found:**
+  - One Indeed job email didn't have my "Indeed Alerts" label, because my Gmail filter missed it. The agent added it. That's exactly the gap the agent is meant to fill.
+  - A bug: a run with nothing new still printed "to undo this run, run undo.py". That run records nothing, so undo would have reversed the run before it. Fixed: the hint only appears when a run changed something.
+
+### Step 4d: Archiving
+- **Decided:** archive emails once they're labeled, so the inbox works as a to-do list. Emails that need a reply or an action, and Unsorted emails, stay in the inbox.
+- **Built:** `change_labels()` in `gmail_client.py` adds and removes labels in one request. It replaced `add_label()` and `remove_label()`, because archiving is just removing the INBOX label. `triage.py --apply` now archives sorted emails (`ARCHIVE_SORTED_EMAILS` turns this off), the log records which emails were archived, and `undo.py` moves them back into the inbox.
+- **Learned:** Gmail labels aren't folders, so archiving doesn't change storage. The benefit is a clearer inbox. Also learned database migrations (`ALTER TABLE`), for adding a column to an existing database.
+- **Result:** undid the first 10 and re-sorted the 10 newest with archiving. 8 were labeled and archived. The 2 that still need me stayed in the inbox: a contract to sign and a LinkedIn message. A check in Gmail confirmed every label and inbox status.
+- **Also decided:** the two empty labels my old mail app created (`[Imap]/Drafts` and `Junk Email`) get deleted by hand in Gmail's settings, not by the agent. That way the agent's code still has no ability to delete anything.
+
+### Step 4e: First bigger batch
+- **Result:** `python triage.py 50 --apply` sorted 48 new emails (2 were already sorted and got skipped) in 94 seconds, for $0.0165. 42 were labeled and archived. 6 stayed in the inbox because they need me: 4 LinkedIn message notifications and 2 contract-signing emails. A check in Gmail confirmed all 48 labels and inbox statuses. The two old labels are deleted.
+- **Found:**
+  - **The inbox holds 6,529 emails.** At the current speed (about 2 seconds per email, one at a time) and cost ($0.00034 per email), sorting all of them would take about 3.6 hours and cost about $2.25. Before doing that, a few decisions are needed (see Open questions).
+  - **One email at a time is slow for a backlog.** For thousands of emails, Claude's Message Batches API fits better: it processes requests in the background at half the price.
+  - **Gmail returns at most 500 emails per request,** so sorting the full inbox needs paging through the results.
+
+### Step 4f: Getting ready for the backlog
+- **Decided:**
+  - Check the labels against **200 random emails from the last 5 years**, not just recent ones, before sorting the backlog.
+  - For **past emails, ignore "needs reply" and "needs action"**: they've all been dealt with. Triage still records the flags (useful for testing the model later), but emails older than 30 days get archived whatever their flags say.
+  - Process the backlog with the **Message Batches API**: half price, and speed doesn't matter.
+- **Built:**
+  - `gmail_client.py`: `list_message_ids()` pages through any number of emails, 500 per request, and accepts Gmail search queries like `newer_than:5y`. `get_emails()` fetches emails in bundles of 50 (Gmail "batch requests"), pausing between bundles to respect Gmail's rate limit and retrying any that fail. `list_recent_emails()` uses both.
+  - `triage.py`: `KEEP_IN_INBOX_DAYS = 30`. Older emails are archived even when flagged.
+  - `label_designer.py` now **improves the current labels** instead of starting over. It reads `labels.json` (descriptions) and examples from each Gmail label, plus a random sample with each email's date. It keeps label names stable, because renaming means relabeling. The code works out which labels are new, edited, unchanged or removed by comparing with the current file, rather than asking the model.
+- **Result:**
+  - Bulk fetching got 120 emails in 5 seconds, instead of about a minute one by one. Listing all 6,494 inbox IDs took 3 seconds. 5,776 of them are from the last 5 years, and 718 are older.
+  - The Label Designer read 236 emails for $0.41. It suggested 4 new labels for types the recent sample never showed: **Travel**, **Housing**, a second-hand marketplace and **Admin & Health**. It improved the descriptions of 10 others, for example adding the universities I attended before and older job boards, and left Indeed Alerts unchanged. 15 labels in total.
+- **Learned:** random sampling to get a representative picture of thousands of emails, paging through API results, batch requests and rate limits, and retrying with increasing waits ("exponential backoff").
+
+### Step 4g: Sorting the backlog with the Message Batches API
+- **Decided:** accepted all 15 labels. Job matches from one career site stay in University. The backlog includes every inbox email, also the 718 older than 5 years.
+- **Built:**
+  - `backlog.py` with four steps:
+    - `sample` is a live dry run on random unsorted emails.
+    - `submit` sends every unsorted inbox email to Claude as one batch, with each email's ID as the request's `custom_id`.
+    - `wait` checks the batch once a minute.
+    - `apply` reads the results, gets each email's current labels from Gmail, groups emails that need the same change, and applies each group with Gmail's `batchModify` (up to 1,000 emails per request). Then it logs every decision as one run.
+  - The batch requests use the same prompt and answer shape as live triage. The SDK's `transform_schema()` turns `TriageResult` into the JSON schema that `messages.parse()` normally builds for us.
+  - `change_labels_bulk()` in `gmail_client.py`, and `undo.py` now uses it too, so undoing thousands of emails takes a few requests instead of thousands.
+- **Dry run:** 40 random unsorted emails from 2019 to 2026 with the new labels, for $0.0187: **0 went to Unsorted**. The new labels caught their cases, such as a rental alert (Housing) and an appointment (Admin & Health).
+- **Found:**
+  - **Gmail's per-minute limit.** The first `submit` could only fetch 3,653 of the 6,486 emails. Gmail answered the rest with "Quota exceeded for quota metric 'Total Query Cost' and limit 'Units per minute per user'", and my retries only waited up to 8 seconds. A test script showed the errors started after just 44 requests. Fix: `get_emails()` now waits a full minute when Gmail refuses because of the limit, then carries on where it stopped. It also tells temporary errors (limits, brief outages) apart from permanent ones, like a deleted email, which it skips instead of retrying forever. Gmail allows this account roughly 400 to 500 emails per minute, so fetching 1,500 now takes 3.5 minutes with nothing missed.
+  - The skipped emails weren't lost. They weren't in the log, so they went into a second batch.
+  - The first version of `apply` said "to undo the whole backlog, run undo.py". But each `apply` is its own run, so undo only reverses the last batch. The message now says so.
+- **Result, batch 1:** 3,653 emails, finished by Claude in about 8 minutes with 0 errors. Cost: **$0.86** at half price (about $0.24 per 1,000 emails). In Gmail, 3,604 were labeled and archived, and 49 recent emails that need me stayed in the inbox. Only 28 went to Unsorted (0.8%). The biggest labels were Promotions (719), University (665), LinkedIn Updates (490), Orders & Payments (396) and Housing (314).
+- **Result, batch 2:** all 2,836 remaining emails were fetched with the fixed code, with none skipped. Claude finished them with 0 errors. 2,835 were archived and 1 stayed in the inbox, for **$0.66**. 17 went to Unsorted.
+- **Checked:** read 150 random backlog emails back from Gmail. **150 of 150** had their label, and their inbox status matched the log.
+- **In total:**
+  - **The inbox went from 6,494 emails to 60.** The 58 kept there are recent and need me (34 of them are messages from buyers or sellers on a second-hand marketplace), plus 2 new emails.
+  - **6,547 emails sorted for $1.54 in total.** That includes the earlier live runs and Label Designer tests.
+  - **Only 45 emails (0.7%) went to Unsorted.**
+  - Across all ages, the model flagged 751 emails as needing an action and 179 as needing a reply. They were archived anyway if older than 30 days. They're test data for checking the model's judgment later.
+
+### Step 4h: Re-sorting the first emails
+- **Built:** `undo.py --list` shows every run, and `undo.py --run RUN_ID` undoes any one of them, not just the last.
+- **Result:** undid the two runs from before the 4 new labels existed (58 emails), then ran `python triage.py 150 --apply`. It re-sorted those 58, plus 30 new emails, for $0.04. A flight itinerary moved from Orders & Payments to Travel.
+- **Decided:** not to add labels for the 45 Unsorted emails. Most of them fit an existing label in an ambiguous way, or need personal context to sort. The web page will make it easy to change an email's label by hand instead.
+- **Found:** triage flagged an appointment as a to-do two days after it had passed, because it doesn't know today's date. Fix (to do): give triage today's date and each email's date.
+
+### Step 5: My own Gmail MCP server
+- **Built:**
+  - `gmail_mcp_server.py` uses the official MCP Python SDK (version 2) to offer 4 tools: `search_emails`, `read_thread`, `list_todos` and `create_reply_draft`. Each tool's docstring becomes the description the model reads, and its type hints become the input schema. Annotations mark the read-only tools, and server-wide instructions warn the model that email content is untrusted.
+  - `gmail_client.py` gained:
+    - `get_thread()`, which reads a whole conversation. It walks each email's tree of parts, prefers the plain text, and falls back to HTML with the tags stripped.
+    - `create_reply_draft()` and `build_reply()`, which reply to the newest message from someone else, with the `In-Reply-To` and `References` headers that keep the reply inside the conversation.
+    - `get_my_address()`, plus searching all mail rather than only one label.
+  - `check_mcp_server.py` starts the server the way an app would, lists its tools and tries the read-only ones. The Drafter in Step 6 will connect the same way.
+- **Learned:** what an MCP server actually is (a program that describes its tools and answers calls over a standard protocol), the stdio transport, tool annotations, how email bodies are stored (MIME parts in base64url encoding), and how email apps link replies to conversations.
+- **Result:**
+  - The check started the server, which offered all 4 tools with the right read-only markings.
+  - `search_emails` found inbox emails with their label names, `list_todos` returned 17 to-dos (such as signing a contract and verifying a booking), and `read_thread` returned a full message.
+  - A separate test read a real 4-message conversation and built a reply (without saving it) that goes to the other person, with the right headers.
+- **Found:**
+  - **The SDK had changed.** In version 2 of the MCP Python SDK, the `FastMCP` class from most tutorials is called `MCPServer`, and the client API changed. Reading the migration guide and the installed code, rather than guessing, got it right the first time.
+  - **Structured answers need precise types.** A tool declared as returning plain `dict` sent its answer as text instead of structured data. Declaring `dict[str, Any]` fixed it.
+  - **The to-do list shows the past-dates bug from Step 4h:** an appointment from two days ago is still listed.
+
+### Step 5b: Triage knows today's date
+- **Built:** each email sent to triage now starts with today's date, and the email's own date and time. A new prompt rule says that an appointment, event or deadline that has already passed needs no action. The date goes in the message, not the system prompt, so the system prompt stays identical for every email (which prompt caching needs).
+- **Result:** in a dry run, two emails about an appointment that had already passed were no longer flagged, while real actions like signing a contract and verifying a booking still were. I undid the last run and re-sorted it (99 emails, $0.05), which archived the past appointments and left 12 real to-dos in the inbox.
+- **Learned:** a model only knows what's in its context. It has no clock, so anything time-dependent needs the date passed in.
+
+### Step 6: The Drafter agent and the Critic
+- **Built:** `drafter.py`, my first real agent.
+  - **The Drafter (Claude Sonnet 5.5)** gets the conversation and, if I give one, my note about what to say. It connects to my Gmail MCP server exactly like Claude Desktop does, but only gets its read-only tools (`search_emails`, `read_thread`), plus one tool defined in my code: `submit_draft`.
+  - **The agent loop** is about 30 lines I wrote myself instead of using a library: send the conversation to Claude, run any tools it asks for, send back the results, and repeat until it calls `submit_draft`. Every turn is appended unchanged, thinking included, because editing the history would throw away the model's earlier reasoning. A step limit stops a confused agent from running up costs.
+  - **`submit_draft`** runs **the Critic (Claude Opus 5.5)**, a single structured-output call that returns `approved`, a list of problems by kind (`invented_fact`, `unapproved_promise`, `missed_question`, `tone_or_language`, `other`) and a summary. The verdict goes back to the Drafter as the tool's result. If there are problems, the Drafter revises and submits again, for at most 3 reviews.
+  - **Only with `--save`**, and only once the Critic approves, my code saves the reply as a Gmail draft through the MCP server.
+  - Prompt caching on the Drafter's turns, so the part of the conversation it resends every turn costs a tenth of the price.
+- **Learned:**
+  - the agent loop itself (stop reasons, `tool_use` and `tool_result` blocks, sending several tool results back in one message),
+  - connecting my own code to an MCP server as a client,
+  - mixing MCP tools with a tool defined in my code,
+  - why the history must stay unchanged,
+  - the writer-and-reviewer pattern (one model writes, another checks).
+- **Result:**
+  - A dry run on a real 8-message conversation wrote a short reply in my usual style, with my usual greeting and sign-off. It left a placeholder for what only I can decide, and noticed that the conversation is four months old. The Drafter decided no extra lookups were needed, and the Critic approved it on the first try. Cost: **$0.085** ($0.033 Sonnet, $0.052 Opus).
+  - **Testing the Critic:** I gave it a deliberately bad draft for the same conversation, with an invented date and a promise I never made. It rejected the draft and caught both, plus three more problems: the invented date fell on a different weekday than the draft said; the draft mixed up who had done something; and a reply four months late should acknowledge the delay. Cost: $0.06.
+- **Not yet tested:** a draft that needs a revision round, and a draft that needs the Drafter to look up other emails. Both will come up with real use.
+
+### Step 6b: Reworking the Drafter with my decisions
+- **How we work from now on:** each design decision is laid out with its options, I decide, and the code is built in small pieces I can check. In the first version of Step 6, every choice was made for me, so this step revisits them.
+- **Decided:**
+  - **The Drafter stays a separate agent,** a client of the MCP server, called from the web page. The MCP server stays a toolbox with no AI inside it. The web page is my hub; the MCP server is the AI apps' hub for Gmail.
+  - **A writing-style file instead of looking up my style every time.** It's built once by Claude Opus from the emails I sent in the last 5 years, with newer ones counting more. One style for everything, because nearly all my emails are formal and in English. If I need something more casual, I'll say so in the hints box. The Drafter gets it with every draft, and the Critic uses it to check tone.
+  - **An about-me file that I write myself** from a short template (name, how I sign, my situation, what the Drafter may and may not say). Facts guessed from old emails can be out of date, and anything in this file can end up in a reply. The Critic gets this file too, so it doesn't flag those facts as invented.
+  - **Lookups only within conversations with the people who wrote in this conversation.** Emails from anyone else can't influence a reply. If a reply needs a fact from elsewhere, I add it in the hints. At first this was only the person I'm answering, but in a group conversation that misses earlier context with the others who wrote. People who were only in To or CC don't count, so a group email to a mailing list doesn't open up half my mailbox.
+  - **In a group conversation, the newest message from someone else gets answered.** If a different message needs the answer, I say so in the hints and choose Reply all.
+  - **Everything is manual, through the web page, nothing automatic:**
+    - a "Sort new emails" button,
+    - a "Draft reply" button with a hints box on each email that needs a reply,
+    - the draft shown with the Critic's verdict, where I decide whether to save it, even if the Critic isn't satisfied.
+  - **Reply, not Reply all,** unless I say otherwise in the hints box.
+  - **Showing it outside the house:** install the project on my laptop from GitHub when needed. A demo mode with made-up emails, safe to show in interviews, comes at the end.
+- **Built so far:**
+  - `get_message()` in `gmail_client.py` reads one full email.
+  - `_execute()` waits out Gmail's per-minute limit for single requests, the same fix as in Step 4g, which my new function had missed at first.
+  - `style_builder.py collect` gathers my sent emails from the last 5 years, leaving out emails to myself. It keeps only the text I wrote, cutting quoted older messages, forwards and "Sent from my iPhone" lines, and saves them to `style_source_emails.json` (not in Git).
+- **Result:** 134 emails with real text of my own; 56 were skipped for having almost none. Most are recent (55 from 2026, 23 from 2025). They're short: the median is 162 characters.
+- **Found:** a first check found quoted text left in 10 emails. Gmail wraps long "On [date], [name] wrote:" lines, so "wrote:" can sit alone on the next line, and there are three different forward formats (Apple's "Begin forwarded message:", and Gmail's "Forwarded Conversation" with and without dashes). After fixing the patterns: 0 left.
+- **Decided (next piece):**
+  - Newer emails count more: they're grouped by year, newest first, with the instruction to follow newer habits where they differ.
+  - The style file has fixed sections: a rich overview of my voice (one or two full paragraphs), greetings and sign-offs by kind of recipient, tone, length and structure, phrases I often use, things I never do, and a few example sentences.
+  - It contains no personal details.
+  - My profile files live in `profile/` (not in Git), with generic versions in `profile.example/`.
+  - For PC and laptop: Gmail is the source of truth. An email that already has one of the agent's labels counts as sorted, and to-dos get their own Gmail label. Moved to later, together with the demo, if I build it.
+- **Built:**
+  - `style_builder.py write`: Claude Opus 5.5 (effort high, streaming) reads the collected emails and writes `profile/writing_style.md`. If that file already exists, it writes `writing_style.proposed.md` instead, so my own edits are never overwritten.
+  - `profile/about_me.md`, a template I fill in myself, with an example version in `profile.example/`.
+- **Decided (connecting it to the Drafter):** the Drafter always gets my last 3 emails to the person (from other conversations). Reply all is a yes/no the Drafter sets only when my hints ask for it; anything else, like adding a CC, goes in the hints or I do it in Gmail. Lookups are limited to emails from, to or CC'd to anyone who wrote in the conversation.
+- **Built (connecting it to the Drafter):**
+  - **Reply all:** `build_reply()` and the MCP tool `create_reply_draft` take a `reply_all` option that puts everyone else on the message in CC. `submit_draft` gained a required `reply_all` field, and the Critic flags it as a `recipients` problem if my hints didn't ask for it.
+  - **`read_thread`** now marks each message `from_me` and includes its CC line, so the code can tell who the person is. The quote cleaner moved from `style_builder.py` into `gmail_client.py` (`strip_quoted()`), so the Drafter can reuse it.
+  - **In `drafter.py`:**
+    - `find_person()` works out who I'm answering: the sender of the newest message that isn't mine.
+    - `my_recent_emails_to()` fetches my last 3 emails to them from other conversations, with only my own words.
+    - `load_profile()` adds both profile files to the Drafter's and the Critic's system prompts, where they're cached because they rarely change.
+    - `find_writers()` lists everyone who wrote a message in the conversation.
+    - `run_lookup()` enforces the limit in code. Every search gets `{from:X to:X cc:X …}` added for each writer (in Gmail search, `{}` means OR), and `read_thread` refuses conversations none of them are in, telling the Drafter why.
+- **Result:** a 1,016-word style file from 134 emails, for $0.15. It's concrete: which greeting goes with which kind of recipient, my most common sign-off, my typical length and structure, and a list of phrases I really use. No personal details ended up in it.
+- **Tests:**
+  - **Reply all, on a made-up group conversation:** Reply went only to the sender, and Reply all added the other two people in CC, leaving out me and a duplicate address.
+  - **The lookup limit:** a search for everything returned 20 emails, all involving the person (10 from them, 8 from me to them, and 2 from someone else to them). A conversation without them was refused, and their own conversation was allowed.
+  - **Group conversations**, on a real 14-message conversation with two other writers: a broad search returned 15 emails, all involving one of them. A conversation with only the *other* writer was allowed, which the first version would have refused. An unrelated conversation was still refused.
+  - **The full Drafter**, on the same real conversation as before: it found my 3 earlier emails to the person and both profile files. It wrote a reply in my style, only to that person, with a placeholder for my opinion. Approved on the first try, for $0.10.
+
+### Step 7: The web page (in progress)
+
+**Technology**
+- **FastAPI** (a Python web framework, run by the uvicorn server), **HTML templates** (Jinja2), **HTMX** and **Tailwind CSS**.
+  - FastAPI: each address, like `/sort`, is a Python function.
+  - HTML templates: pages that Python fills in.
+  - HTMX: buttons that update part of the page without reloading it, with no JavaScript to write.
+  - Tailwind: styling with small utility classes, turned into one CSS file by Tailwind's own program (see the decisions for piece 1 below).
+- **Why not Streamlit:** Streamlit would be faster to build and easier to host, but I want to learn how web apps actually work and make the page look like my own. FastAPI is also a very common way to put AI agents behind an API in AI engineering jobs, and HTML and CSS are the foundation under every web framework, Streamlit included. Streamlit is quick to learn later if a job asks for it.
+- **Why Tailwind:** it's the most common styling approach at modern startups, it gives full control over the design, and the skill carries over to any frontend work. The other options were Pico.css (clean with almost no effort, but less unique), Bootstrap and my own CSS.
+- **It runs on my own computer** (`localhost`). Only my browser can open it, because it uses my Gmail login and API key. A demo version with made-up emails could go online later. That's the same amount of work with FastAPI as with Streamlit, except that hosting takes an hour more to set up.
+
+**Pages**
+- A menu bar with three pages, and a **"Sort new emails"** button that's always visible at the top. Clicking "Inbox Agent" opens the home page, an overview (built in piece 1f).
+  1. **Action needed:** two columns, like an email app. On the left, the list of everything that needs me (replies and other actions), with filters and counts, urgent items first, and duplicates from the same conversation grouped. On the right, the selected email with its details and buttons. When nothing needs me, an "all done" summary instead of an empty page.
+  2. **Unsorted:** emails that fit no label, with the label each one suggests. I approve, edit or reject the suggestion, or pick a label myself.
+  3. **History:** past runs, what was sorted where, undo, and a **"Needs action"** button to move anything the agent missed onto my Action list.
+- **Why this layout:** a single page would get cluttered, and separate pages for everything would mean clicking back and forth. The two-column view fits how I'll work through emails one at a time and looks like a real product.
+
+**Reading actions properly: a two-stage read**
+- **Stage 1 (as now):** triage reads only the sender, subject, date and Gmail's preview (the first ~200 characters). That's enough to sort, but it can miss what exactly an action is, where to do it, or by when.
+- **Stage 2 (new): a full read of the whole email.** It happens for every email outside the **routine labels**, plus any routine-label email that triage flags anyway.
+  - **Routine labels** (never need action in practice): Promotions, Job Alerts, LinkedIn Alerts and Indeed Alerts. In the last 30 days, 284 emails arrived (about 9 a day). The 103 in those labels needed no action, and every flagged action came from the others, so this means about 6 full reads a day.
+  - **Security & Logins stays non-routine,** because a "was this you?" alert can need action.
+- **What stage 2 finds:**
+  - the type of action: reply by email, reply on another site, sign or fill in a form, pay, verify an account, attend something, or other,
+  - what exactly to do, as short steps,
+  - where to do it (the link),
+  - the deadline,
+  - whether it's time-sensitive without a date ("as soon as possible", "today").
+- **A model cascade:**
+  - **Claude Haiku** reads each email and answers **yes / no / unsure**. It says "unsure" whenever an email asks for something but it can't tell whether that's required, optional or already done, and whenever it's torn between yes and no.
+  - **Claude Sonnet** reviews only the unsure ones.
+  - Cost estimate for this stage: about $0.50 a month, against about $2 if Sonnet read everything. The whole app should cost about $1.50 to $2 a month in normal use.
+- **Why lean towards flagging:** missing an email that needs action is much worse than a false alarm I can dismiss in a second. In other words, recall matters more than precision here. The full read filters out the false alarms, and the History page's "Needs action" button catches anything both models miss.
+- **Urgency is decided by code, not the model:** the model only finds the deadline. Due within 2 days counts as **urgent**, overdue to-dos get a gray tag of their own and sit after the urgent ones, and everything else is normal. "Time-sensitive" emails without a date are marked separately.
+
+**Build order** (one small piece at a time, with my decisions along the way)
+1. A bare page that shows my current to-dos (learning how FastAPI, templates and Tailwind fit together, with nothing that changes Gmail yet), in six smaller pieces (see below)
+2. The full-read step and urgency
+3. The "Sort new emails" button
+4. The Unsorted page
+5. The History page
+6. The draft flow: hints box, the Critic's verdict, and saving, also when the Critic isn't satisfied
+- **Later, together with the demo (if I build it):** using the project on both my PC and my laptop, with Gmail as the source of truth and a "To do" Gmail label.
+
+**Decisions for piece 1**
+- **The web app has its own folder, `web/`.** `app.py` creates the app, `templates/` holds the HTML templates, and `static/` will hold files sent to the browser as they are, like the CSS. The agent's scripts stay where they are for now. A one-line `web/__init__.py` marks the folder as a Python package, so the server can start it as `web.app` from the project folder.
+- **Only the packages it needs.** `fastapi` and `jinja2` added 4 packages in total. The server, uvicorn, was already installed because the MCP SDK uses it, and it's now pinned in `requirements.txt` as well. FastAPI's `fastapi[standard]` bundle would have added 36 packages, mostly for things this app doesn't use, like deploying to FastAPI's cloud service, error reporting and monitoring. A dry run of `pip install` showed beforehand that FastAPI leaves the Starlette version the MCP SDK relies on unchanged.
+- **Started with uvicorn directly:** `python -m uvicorn web.app:app --reload`. The command shows the two layers: uvicorn is the server, and `app` in `web/app.py` is the FastAPI app.
+- **Tailwind's standalone program instead of its CDN script.** The one-line CDN script is meant for development, builds the styles in the browser on every page load, and would mean trusting an outside server with a script running on a page full of my emails. The standalone program (no Node.js needed) reads my templates and writes one CSS file that my own app serves, so the browser loads nothing from outside. The program comes from Tailwind's GitHub releases and gets checked against its published SHA-256 checksum. It stays out of Git: it's 112 MB, and GitHub refuses files over 100 MB.
+- **The generated CSS stays out of Git.** Files a tool can rebuild are normally built where they're needed rather than stored. An online demo would build the CSS while deploying, so its styles always match the templates.
+- **Two terminals while building:** one runs the server, the other runs Tailwind, which rebuilds the CSS whenever a template changes.
+- **Reorganizing the rest of the project into folders waits until after Step 7,** as its own step, once every file exists. It needs care, because two mistakes would fail silently: `database.py` would create a new, empty database if it couldn't find `inbox_agent.db`, and `triage.py` would fall back to the example labels if it couldn't find `labels.json`.
+- **Piece 1 in six smaller pieces:** 1a the first page, 1b Tailwind, 1c the layout, 1d my to-dos from the database, 1e only the to-dos still in my inbox, 1f a home page.
+- **A home page, as piece 1f.** Clicking "Inbox Agent" should open a summary rather than the Action needed page: how many to-dos and Unsorted emails are waiting, the replies drafted and waiting for me to send, and what the agent sorted lately. The very first line of this README promised a daily summary, and it had been folded into Action needed. Numbers that need later pieces, like the drafts, will say which piece they arrive in.
+
+**Piece 1a: the first page**
+- **Built:** `web/app.py`, a FastAPI app with one page at `/`, filled in from the template `web/templates/hello.html`. The page shows the time it was made.
+- **Learned:**
+  - How a page gets served: the browser sends a request, uvicorn (the server) receives it, FastAPI finds the function for that method and address (a "route"), and Jinja2 fills in an HTML template with the values the function passes it. It's the same pattern as my MCP server, which waits for requests on stdin and answers on stdout. A web server waits on a network port and answers with HTML.
+  - GET means "show me something" and POST means "do something". Anything that changes Gmail will be a POST, because browsers resend GET requests on their own.
+  - Escaping is the web version of SQL's `?` placeholders: values from outside are always treated as data, never as code.
+  - Jinja comments (`{# … #}`) are removed before the page is sent, unlike HTML comments, which anyone can read with View Source.
+  - A web page only exists while its server is running. When I opened the address in Chrome with the server stopped, Chrome said "This site can't be reached": nothing was listening at 127.0.0.1:8000. And 127.0.0.1 always means "this computer", so the page opens in any browser on my PC, but not from my phone.
+- **Result:**
+  - The page loads at http://127.0.0.1:8000. Refreshing it 11 seconds later changed the time from 13:27:49 to 13:28:00, so the page is built fresh for every request.
+  - `netstat` shows the server listening on `127.0.0.1:8000` only.
+  - A planted `<script>` tag came out of the template as `&lt;script&gt;`, shown as text.
+  - `pip check` found no conflicts, and Starlette stayed at 1.10.0 for the MCP server.
+- **Found and decided:** FastAPI adds pages of its own: `/docs` and `/redoc` (interactive documentation of the app's addresses) and `/openapi.json`, which those two read. The documentation pages load their scripts from a public CDN with only the major version fixed, so the file can change at any time, and a script running at my app's address could read my pages and press my buttons. These pages are useful for an API that other programs call, but this app serves pages to me, so I switched them off. All three now answer "404 Not Found".
+
+**Piece 1b: styling with Tailwind**
+- **Decided:**
+  - The built CSS is readable on my PC, so I can open it and see what each class turns into. A public site, like the online demo, would build it minified (`--minify`).
+  - An empty `web/static/.gitkeep` keeps the `web/static/` folder in Git. Git doesn't store empty folders, and the built CSS stays out of Git, so without it the app would refuse to start on a fresh clone ("Directory does not exist").
+  - The template links to the CSS with FastAPI's `url_for('static', path='app.css').path`. The link is built from the folder's name in the app, and `.path` keeps it short (`/static/app.css`). That avoids a known problem behind a hosting service's HTTPS, where the full link can come out as `http://…` and get blocked.
+  - Minimal styling for now. The real look comes with the layout, in piece 1c.
+- **Built:**
+  - Tailwind's program, downloaded to `tools/` (not in Git) from Tailwind's GitHub releases. Its SHA-256 fingerprint matched the one published with the release.
+  - `web/tailwind.css`, Tailwind's input file. `source(".")` limits Tailwind to the `web/` folder.
+  - `web/app.py` serves the `web/static/` folder at `/static`. The template links to the built `app.css` and uses a few Tailwind classes.
+- **Learned:**
+  - Utility classes: each class does one small thing (`p-8` adds space inside an element, `rounded-lg` rounds the corners), and an element gets its look from a list of them.
+  - Tailwind reads files as plain text and writes CSS only for the class names it finds. It even picked up the word "static" from `web/app.py` and made a harmless `.static` rule.
+  - One page is several requests: the browser gets the HTML, finds the `<link>` to the CSS, and fetches that separately.
+  - A fingerprint (SHA-256 checksum) proves a download is exactly the published file. It can't prove the published file itself is safe, so it only helps together with downloading from the official source.
+- **Result:**
+  - The build takes 28 ms (about 1 second including starting the 112 MB program) and makes an 8 KB CSS file with no local file paths in it.
+  - Every class in the template got a rule. A comparison build that read the whole project folder picked up 6 extra words from the README and Python files (`table`, `block`, `fixed`…). The real build didn't, so Tailwind only reads `web/`.
+  - The browser shows a white card, 576 px wide and centered, with rounded corners and a shadow, on a light gray page. While trying out the watcher, I changed the page to light blue (`bg-blue-100`) and kept it.
+  - Requests for files outside `web/static/`, like `/static/../../token.json`, get "404 Not Found".
+  - The watcher (`--watch`) uses about 94 MB of memory and almost no processor time: 0.14 seconds in total, including its first build and two rebuilds. A rebuild after saving a template takes under half a millisecond.
+- **Found:** the app doesn't tell browsers how long to keep the CSS (there's no `Cache-Control` header), so a browser may reuse its saved copy for a short while after a rebuild. Ctrl+F5 reloads the page without it. The usual fix is a version number in the CSS link, for later. (Done in piece 1e, part 4, after it actually happened.)
+
+**Piece 1c: the layout**
+- **Decided:**
+  - Parts that aren't built yet are shown, clearly marked. Unsorted and History say which piece they arrive in, and the "Sort new emails" button is greyed out, with "Coming in piece 3" on hover. That way the layout is complete and testable now, and piece 3 needs a disabled button anyway, while sorting runs.
+  - Blue as the accent color, for the current menu item and the Sort button, on my light blue page with a white top bar and cards.
+  - The Inter font, chosen now from five options rather than left for later. The app serves it itself instead of loading it from Google Fonts.
+  - Made for my PC, but not broken on a phone: on a narrow screen the top bar wraps onto three lines.
+  - Action needed is the home page (`/`), next to `/unsorted` and `/history`. The top bar stays in view when scrolling, and each page has its own tab title. (In piece 1f, the home page became an overview, and Action needed moved to `/action-needed`.)
+- **Built:**
+  - `web/templates/base.html`, the shared layout: the page's `<head>`, the top bar with the menu and the Sort button, and a slot for each page's content. `action.html`, `unsorted.html` and `history.html` fill that slot, and replace `hello.html`.
+  - One route per page in `web/app.py`. Each tells the layout which menu item to highlight.
+  - Inter 4.1 in `web/static/fonts/`, with its license file (the SIL Open Font License, which allows shipping it with the app), set as the font in `web/tailwind.css`. Inter publishes no checksums, so I compared two official copies instead: the font in the release on GitHub and the one on Inter's website have the same SHA-256 fingerprint.
+- **Learned:**
+  - Template inheritance: one layout with empty "blocks" that each page fills in, so the menu is written once.
+  - Links are for going (a GET request for another page), buttons are for doing (they'll send a POST).
+  - Tailwind variants: a prefix applies a class only in some situations, like `hover:` or `disabled:`. In the CSS, `.disabled\:opacity-50:disabled` means "this class, while the element is disabled".
+  - A variable font holds every weight in one file, and `@font-face` tells the browser where to find it.
+  - Servers label every file they send with its type, like `text/css`, looked up from the file's extension.
+- **Result:**
+  - All three pages load. Each menu link opens its page, the current page is highlighted in blue, and each tab has its own title. Clicking "Inbox Agent" goes back home.
+  - Inter loads from my own app: besides the page itself, the browser fetched only two files, `app.css` and the font, and the font it got matches the checked copy byte for byte.
+  - The Sort button is disabled and says "Coming in piece 3" on hover.
+  - On a phone-sized window (375 px wide), nothing sticks out sideways.
+  - All 45 different classes in the templates have a rule in the 10.7 KB CSS file.
+- **Found:**
+  - **The font was sent as an unknown file.** The server looks up each file's type from its extension in Python's list of types, and on this computer that list doesn't include `.woff2`, so the font went out as "application/octet-stream". Browsers coped, but one line in `web/app.py` now adds the type, and the font goes out as `font/woff2`.
+  - **`--reload` got stuck in the background server I test with.** It noticed the change ("Reloading...") but the old server kept running with the old code. On Windows, uvicorn stops the old server with the same signal as pressing Ctrl+C in a console window, and a server started in the background has no console window, which is most likely why it never arrived. In a real terminal, the same command shut the old server down and started a new one within seconds. So `--reload` works the way I run the app, and a background test server needs a manual restart after Python changes.
+
+**Piece 1d: my to-dos from the database**
+- **Decided:**
+  - Every flagged email the agent left in the inbox is a to-do, whatever its age. The MCP server's `list_todos` only looks back 14 days: that would show 13 of my 62 and hide 49 that are still in my inbox. In 1e the MCP server switches to the same definition, so the page and Claude Desktop agree.
+  - One row per conversation. The 62 flagged emails come from 28 conversations, one of them with 16. The newest email decides what the row says, followed by "+15 more in this conversation".
+  - Each row has an amber "Action" or blue "Reply" tag, the to-do itself (what triage said to do, or "Reply to [name]"), and a gray line with the sender, subject, date and label. Newest first, until piece 2 sorts by urgency.
+  - The "Open in Gmail" link moves to 1e. I'm signed in to several Google accounts in Chrome, and a Gmail link opens the first one unless it names the account. The app should take the address from Gmail itself rather than from a file in Git, and connecting to Gmail is what 1e is for.
+- **Built:**
+  - `open_todos()` in `database.py`: the flagged emails the agent didn't archive, newest first.
+  - `todos_for_page()` in `web/app.py` groups them per conversation and works out what each row says, so the template only draws. Each page load opens its own database connection and closes it afterwards.
+  - `action.html` draws the list, or "Nothing needs you right now" when it's empty.
+- **Learned:**
+  - Python does the thinking, the template does the drawing: the page's function prepares plain values, and the template only loops over them.
+  - A SQLite connection only works on the thread that opened it, and FastAPI may handle each page load on a different thread, so every page load opens its own.
+  - Tests open the log read-only (`mode=ro`), so a test can never change it.
+- **Result:**
+  - The page shows 28 conversations, newest first, from 26 Oct back to 23 Sep: 26 with an Action tag and 5 with a Reply tag (3 have both), and 7 grouped, the biggest with "+15 more". All 62 emails are counted exactly once.
+  - The page is built in 27 ms, and the browser still loads nothing from outside.
+  - Long subjects wrap, so nothing sticks out sideways, on the PC or at phone width.
+  - With an empty list, the page says "Nothing needs you right now".
+  - Nothing changed in Gmail or the log, and it cost nothing: there are no Claude or Gmail calls.
+- **Found:** 39 of the 62 to-dos are over 30 days old. The inbox check in 1e will show how many of them I've already dealt with and archived myself.
+
+**Piece 1e: only the to-dos still in my inbox (in progress)**
+- **Decided:**
+  - **A to-do is a flagged email that's still in my inbox.** When someone replies to a conversation I've archived, Gmail puts the conversation back in my inbox, but only the new email gets the inbox label. So the old to-do stays done, and the reply becomes a to-do only if triage flags it on the next run.
+  - **One question to Gmail per page load:** "which emails are in my inbox?" (5 quota units per 500 emails), checked against the flagged emails in the log. Asking about each flagged email separately, as the MCP server does now, would cost 1,240 units for 62 emails, a fifth of the 6,000 units Gmail allows per minute.
+  - **A new Gmail connection for every page load,** rather than one shared connection that page loads take turns with. Page loads never wait for each other, and a dead login can't stick around, so after signing in again the next page load just works. Google's own example web app works this way. The cost is a moment of connecting on every page load.
+  - **When Gmail can't be checked,** the page still shows the list from the log, with a notice that says what went wrong and what to do. It never opens a sign-in window by itself.
+  - **Signing in again from the page,** with a "Sign in to Gmail" button, instead of running a command in a terminal every week. Google sends me back to the app, which saves the new login. It uses the standard protection against faked sign-in answers, a random code that has to come back with Google's answer, which Google's library has built in.
+  - **"Open in Gmail" links that name my account** with Gmail's `authuser` setting. The app gets my address from Gmail, never from a file. A small link at the right of each row opens the conversation in a new tab.
+  - **One definition of a to-do, in a new `todos.py`,** used by both the page and the MCP server, so Claude Desktop sees exactly what the page shows: one entry per conversation, with no 14-day limit.
+  - **Five parts:** 1 the connection and the notice, 2 the sign-in button, 3 the inbox check, 4 the Gmail link, 5 Claude Desktop's list.
+- **Found while planning:**
+  - **Gmail's request limits changed on 1 May 2026.** New Google Cloud projects get 6,000 quota units per user per minute, and fetching one email now costs 20 units.
+  - **The MCP server holds on to a dead login.** Making a Gmail connection doesn't check the login; the first request does. The MCP server connects once, keeps that connection, and only handles login problems while connecting. So once Google ended the login, signing in again wouldn't help until Claude Desktop restarted. Part 5 makes it connect fresh for every tool call.
+  - My Gmail login had just expired, so part 1 could be tested on the real thing.
+
+**Piece 1e, part 1: a new Gmail connection, and a notice when there isn't one**
+- **Built:**
+  - `connect_to_gmail()` in `web/app.py` makes a new Gmail connection for each page load, or says why it can't. The connection itself gets used from part 3 on.
+  - `action.html` shows an amber notice above the list, with one of three messages. Each one warns that the list may include emails I've already archived.
+    - "Gmail needs you to sign in again" when the login has ended, with the command to run.
+    - "Couldn't reach Gmail" when there's no internet.
+    - "Gmail isn't answering right now" when Google has a temporary problem on its side.
+  - `gmail_client.py` has three errors of its own, one per situation: `SignInNeededError`, `GoogleUnreachableError` and `GoogleTemporaryError`. So the rest of the project never deals with Google's own error types, as that file promises. All three are `RuntimeError`s, which the MCP server already catches.
+- **Learned:**
+  - A page that talks to another service has to plan for that service failing. Reading a file on my PC either works or it doesn't, but asking Google can fail in several ways, and each needs its own message.
+  - Google's library reports these failures in different ways. No internet is a `TransportError`. A refused login renewal is a `RefreshError`, marked "retryable" when Google says the problem is temporary.
+  - Making a connection doesn't check the login. Renewing the short-lived access key the connection carries (it lasts an hour) does, and with a new connection per page load, that happens while connecting.
+  - Python's convention is to end error names with "Error".
+  - A test can run the real app on its own server inside the test script and "patch" parts of the code, to fake situations that can't happen on demand, like having no internet or a Google outage.
+- **Result:**
+  - With my real expired login, the page shows the sign-in notice above all 28 rows. No sign-in window opened, and the failed attempts didn't change `token.json`.
+  - On a test server, every situation shows the right notice: no internet, a Google outage with a proper "temporary" answer, a Google outage with an error page, a refused login, a missing login file, and a working login (no notice). Four page loads at the same moment each took about 0.25 seconds, the same as one alone, so they didn't wait for each other.
+  - During an outage, the scripts now stop with "Google has a temporary problem on its side" instead of opening a sign-in window that couldn't help, and the MCP server tells Claude the same.
+  - While the login is expired, a page load takes about 0.25 seconds instead of 27 ms, because the page asks Google each time. When Google answers "temporary", it takes about 3 seconds, because Google's library tries 3 times before giving up. The time with a working login is in part 2.
+  - Nothing sticks out sideways, on the PC or at phone width.
+- **Found and fixed:** my first version treated every refusal from Google as an ended login, so a Google outage would have told me to sign in again. Checking only the library's "retryable" mark wasn't enough either. When Google's servers send back an error web page instead of a proper answer, which is typical during outages, the library marks it as not temporary, even after a 503 it had just retried. Faked answers confirmed it: the library said "not temporary" to both error pages I tried. So `gmail_client.py` also checks whether the answer is a web page (it starts with a tag like `<html>`). Anything else still counts as an ended login: when unsure, it's better to be asked to sign in than to be told to wait for nothing.
+
+**Piece 1e, part 2: signing in from the page**
+- **Decided:**
+  - **The app remembers which account it belongs to.** token.json notes the address of the account its login belongs to, in a field Google's library has for exactly that. Google's sign-in page then has that account selected, and a different account is refused. A wrong pick would otherwise switch the whole agent, sorting included, to another inbox, and my Chrome uses another Google account by default. show_inbox.py's sign-in gets the same check. To switch accounts on purpose, I delete token.json first.
+  - **The notice only shows the button.** When signing in through the page fails in a way the button can't fix, the message mentions the terminal command.
+  - **A real button that sends a POST,** because starting a sign-in does something: the app creates and remembers the random code and the secret. Browsers sometimes open links ahead of time, but they never press buttons by themselves.
+  - **Signing in ends on the address behind "Inbox Agent",** whether it worked or not, with a message shown once: green with the account's address, or red with what went wrong. That's Action needed for now, and the home page once piece 1f is built. So the notice and the messages moved into the shared layout, where any page can show them.
+  - Google is asked for a long-lasting login every time (`prompt=consent`), as its docs advise.
+- **Built:**
+  - `start_web_sign_in()` and `finish_web_sign_in()` in `gmail_client.py`: the trip to Google's sign-in page and back. The second one checks the random code, trades Google's one-time ticket for the login, checks the account and saves the login.
+  - Two new addresses in `web/app.py`: `/sign-in` (the button) and `/sign-in/callback` (where Google sends the browser back). In between, the sign-in in progress waits in the server's memory, and each attempt can be used once.
+  - The notice and the one-time message in `base.html`. Action needed adds its own line about the list.
+- **Learned:**
+  - How "Sign in with Google" (OAuth) works: the app sends me to Google, Google checks it's me and asks whether the app may use my Gmail, then sends me back with a one-time ticket. The app trades the ticket for the login directly with Google, so it never sees my password.
+  - The two protections, both made by Google's library. A random code (the "state") has to come back unchanged, so no other website can slip its own ticket in. And a secret whose fingerprint goes to Google first (PKCE) has to be shown when trading the ticket, so a ticket stolen on the way back is useless to anyone else.
+  - A redirect is an answer that tells the browser to go to another address, which it does by itself. 303 is the standard redirect after a POST.
+  - Google checks the return address before it shows its sign-in page. With my app's address, Google showed its normal sign-in page; with a made-up one, "Error 400: redirect_uri_mismatch". So the login setup I already had (a "Desktop app" client) works, with nothing to change in Google Cloud.
+- **Result:**
+  - 16 tests with a faked Google, all passed: the button's trip to Google (random code, fingerprint, long-lasting login, pre-selected account), refusing a return with no attempt in progress, a wrong code or a reused one, Cancel, a refused ticket, no internet, an account that can't be checked, a different account (in show_inbox.py too), and a successful sign-in, with the green message shown once. No failed case saved anything, and the real token.json was never touched.
+  - The 12 tests from part 1 still pass.
+  - **The real thing:** I signed in with the button in Chrome. I came back to a green "Signed in to Gmail as …", token.json now notes my account and holds a long-lasting login, and the notice is gone.
+  - With a working login, a page load takes about 7 ms, so a new connection for every page load costs almost nothing. Once an hour, when the short-lived access key runs out, one page load renews it with a round trip to Google, about a quarter of a second.
+
+**Piece 1e, part 3: only the to-dos still in my inbox**
+- **Decided:**
+  - **A to-do "recipe" in `todos.py` that doesn't fetch anything itself.** `list_todos()` is given two lists, the flagged emails from the agent's log and the IDs of the emails in my inbox from Gmail, and works out the to-dos from them. Whoever uses it fetches the two lists and deals with problems its own way. When Gmail can't be asked, the page hands over "no list" and gets the log's list unfiltered.
+  - **Each to-do is a named `Todo`,** like the `Email` shape in `gmail_client.py`, so a misspelled field fails loudly instead of quietly showing nothing.
+  - **Shared in the recipe:** which emails count, grouping per conversation, what to do and "+N more", so the page and Claude Desktop will say the same thing. **Page-only:** how the date looks.
+  - Clearer names: `database.py`'s `open_todos()` became `flagged_emails()`, so it isn't confused with the recipe's `list_todos()`.
+  - Failures while asking Gmail show the same three notices as failures while connecting. "Too many requests" counts as a temporary problem on Google's side.
+- **Built:**
+  - `todos.py`, with `Todo` and `list_todos()`.
+  - `inbox_message_ids()` in `gmail_client.py`: one request for the IDs of every email in my inbox (5 quota units per 500 emails). Its failures come out as that file's own three errors.
+  - The page asks for the inbox list on every load, hands both lists to `list_todos()`, and formats dates itself with a template filter, `show_date`.
+- **Learned:**
+  - A function that only works with what it's given is easy to test: I checked the recipe with invented conversations, without Gmail or the internet.
+  - A template "filter" formats a value inside the template, like `{{ todo.received|show_date }}`.
+  - Some failures should stay loud. An unexpected answer from Gmail (like "bad request") still gives an error page, because a friendly notice would hide a bug.
+- **Result:**
+  - 28 tests passed:
+    - The recipe with made-up lists: an archived conversation disappears, a partly archived one keeps only its inbox emails and moves down to where its newest remaining email belongs, a reply in an archived conversation doesn't bring the old to-do back, and an empty inbox means nothing needs me.
+    - The recipe with my real log and inbox: 28 conversations, all 62 flagged emails counted once, and the same tags and groups as in 1d.
+    - Eight kinds of failure while asking Gmail (a server error, too many requests, the per-user rate limit, an ended login, two kinds of no internet, and a refused or failed login renewal), each with the right notice above the log's list. Failures while connecting still work as in part 1.
+    - Faked archiving on the real page: archiving a whole conversation removes its row, and archiving the newest email of the 16-email conversation turns "+15 more" into "+14 more".
+  - My inbox holds 87 emails, including all 62 flagged ones, so the page still shows all 28 conversations: I haven't archived a single to-do yet.
+  - **The real thing:** I archived two to-dos I'd already dealt with (two LinkedIn updates) in Gmail, and on the next reload they were gone: 26 conversations left.
+  - A page load now takes about 0.37 seconds instead of 7 ms, nearly all of it waiting for Gmail's answer.
+- **Found:**
+  - Two of my made-up tests expected the wrong thing, and the code was right both times. A to-do that needs a reply and an action but has no action text says "Reply to [name]", the rule from 1d. And a partly archived conversation moves down the list.
+  - Around 15:00, two test runs in a row hit a failed Gmail question. That check didn't yet print what failed, so the cause is unknown, most likely a short network blip. The 70 questions afterwards, each on a new connection like the page's, all worked. On the page, a blip like that shows a notice for one load, and the next load works.
+  - For now, marking a to-do as done means archiving it in Gmail. A "Done" button on the page would have to archive in Gmail, so that's a decision for a later piece.
+
+**Piece 1e, part 4: an "Open in Gmail" link that names my account**
+- **Decided:**
+  - **The link names my account with Gmail's `authuser` setting** and opens the conversation: `https://mail.google.com/mail/?authuser=<my address>#inbox/<conversation ID>`. Without `authuser`, Chrome opens its default Google account, which on my PC isn't the one the agent sorts.
+  - **My address comes from the saved login,** where signing in records it straight from Gmail (part 2). That costs no request to Gmail, where asking on every page load would add about a third of a second, and token.json stays out of Git.
+  - **The links stay when the app can't reach Gmail,** because they open Gmail in Chrome, which has its own sign-in. Without a known account, there are no links rather than links to the wrong account.
+  - A small "Open in Gmail ↗" that opens a new tab and tells Gmail nothing about the page it came from (`rel="noopener noreferrer"`). Screen readers hear "(opens in a new tab)" instead of the arrow.
+  - **Each link starts a line of its own, under the rest of its row,** on every screen. I preferred one tidy place for all of them over a link on the right.
+- **Built:**
+  - `gmail_link()` in `web/app.py` builds a row's link. The template calls it the way it calls `url_for()`.
+  - `saved_account()` in `gmail_client.py`, now public, reads my address from token.json.
+  - The link on each row of `action.html`.
+  - A fingerprint in the CSS link (`app.css?v=…`), made by `file_version()` in `web/app.py`, so browsers fetch the CSS again whenever it changes.
+- **Learned:**
+  - The part of a web address after `#` (the "fragment") never goes to the server: the page reads it in the browser. Gmail uses it to know which conversation to open.
+  - Inside a link, some characters are written as codes, like `@` as `%40`.
+  - Browsers keep copies of files like the CSS. When the server doesn't say for how long, the browser decides by itself, and it may keep using an outdated copy. Putting a fingerprint of the file in its link ("cache busting") changes the link whenever the file changes.
+- **Result:**
+  - 8 tests passed: one link per row (26), each naming my account and its own row's conversation and opening in a new tab; no extra request to Gmail (a page load still takes about 0.4 seconds); the links stay under the sign-in notice; and there are no links without a known account.
+  - **The real thing:** I clicked a link in Chrome, which normally opens my other Google account. Gmail opened in my main account, on the right conversation.
+  - Every link starts its own line at the row's left edge, on the PC and at phone width, where the to-do text keeps a 207-pixel column.
+- **Found and fixed:**
+  - My first layout kept the link on the right, even on a phone, which squeezed the to-do text into an 84-pixel column, about one word per line.
+  - **Chrome reused an outdated CSS file.** After part 4, the links sat in odd places in Chrome, and "(opens in a new tab)", meant only for screen readers, was visible. The server was sending the new CSS, but it doesn't tell browsers how long to keep files, and the CSS's address never changed. So Chrome kept using the copy it had saved before part 4, which didn't have the new rules. That's the problem noted in piece 1b. The CSS link now carries a fingerprint of the file (like `app.css?v=9c5b2e95`): every rebuild changes the link, so the browser fetches the new file, and while the CSS stays the same, the browser can keep its copy.
+
+**Piece 1e, part 5: Claude Desktop gets the same to-do list**
+- **Decided:**
+  - **`list_todos` uses the recipe from `todos.py`,** so Claude Desktop sees exactly what the page shows: one entry per conversation, with no 14-day limit. Before, it saw 11 entries from 8 conversations, missed 18 of the page's 26, and asked Gmail about each email separately, for 240 quota units per call instead of 5.
+  - **A new Gmail connection for every tool call,** like the page. That fixes the server holding on to an expired login (found while planning 1e): signing in again, with the page's button for example, now works for Claude Desktop straight away. The lock is gone, because tool calls no longer share anything.
+  - **When Gmail can't be asked, Claude gets a clear message and no list,** rather than the log's list with a warning. Then it can't act on a to-do I've already dealt with, like offering to draft a reply to it.
+  - **Each to-do comes with the same "Open in Gmail" link as the page,** so Claude can hand me a link that opens my main account. `gmail_link()` moved to `gmail_client.py`, so the page and the server share it.
+  - The message about an expired login now points to the page's "Sign in to Gmail" button first, and to the terminal command as a way out.
+- **Built:**
+  - `list_todos` in `gmail_mcp_server.py`: one question to Gmail for the inbox list, the flagged emails from the log, and the recipe. Each to-do has the page's fields, its date in full (like `2026-10-25T15:52`) and its Gmail link.
+  - `gmail()` makes a new connection for every tool call, and the lock is gone.
+  - `recent_todos()` is gone from `database.py`, and `check_mcp_server.py` calls the new `list_todos`.
+- **Learned:**
+  - An MCP tool's inputs come from its Python parameters: removing `days` removed the setting from what Claude sees.
+  - The MCP server runs for as long as Claude Desktop does, so code changes only reach Claude after quitting and reopening the app.
+- **Result:**
+  - 12 tests passed. Through MCP, the way Claude Desktop uses the server: `list_todos` takes no settings, says it's the page's list, is still read-only, and returns the same 26 conversations as the page, in the same order, with the same fields and Gmail links and all 60 flagged emails; two tool calls at the same moment both work. With patches: an expired login gives Claude the sign-in message and no list, the next call after signing in again works without restarting the server, and no internet or a problem at Google gives a clear message.
+  - `check_mcp_server.py` lists the 4 tools and gets 26 conversations from `list_todos`. The draft tool was never called, so nothing in Gmail changed.
+  - The page's 8 link tests still pass.
+  - **The real thing:** after restarting Claude Desktop, I asked it "what's on my to-do list?". The tool gave Claude the same 26 conversations as the page, and Claude's answer covered all of them, grouped by urgency and topic into 17 bullets (four reminders for one contract became one, for example). For one to-do, it suggested using the company's own site rather than the link in the email.
+- **Found:**
+  - Claude's answer said "24 items" while listing all 26: a counting slip by the model while summarizing. The numbers to trust come from code, like the page's count.
+  - Claude pointed out to-dos that are probably done or out of date: an expired one-time code, an old check-in and a past event. They stay on the list until I archive them in Gmail. Piece 2's deadlines and a "Done" button (in What's left) are where that gets better.
+
+**Piece 1f: the home page**
+- **Decided:**
+  - **Six cards:** what needs me, new emails not sorted yet, Unsorted, replies waiting to be sent, the last sorting run, and what sorting has cost. Four are what I'd asked for. The new-emails card says when it's time to sort, and the cost card keeps an eye on my budget of a couple of dollars a month.
+  - **"Lately" means the last sorting run,** not the last 24 hours. Sorting is still started by hand, so "the last 24 hours" would say 0 on most days. It did: the last run was 6 days earlier.
+  - **Clicking "Inbox Agent" goes home,** as on most websites, rather than a fourth menu item. On the home page, no menu item is highlighted.
+  - **Cards in a grid:** three across on the PC, two on a tablet and one on a phone.
+  - Action needed moved to `/action-needed` and the home page took `/`, so signing in now ends on the home page without changing the sign-in code. The menu's links followed by themselves, because they're built from the page names.
+  - Numbers that need later pieces say so: replies waiting to be sent come with piece 6, and sorting from the page with piece 3. The cost card counts only sorting, the one cost the log records.
+- **Built:**
+  - `home()` in `web/app.py` and `templates/home.html`: one Gmail question (the inbox list), and everything else from the log.
+  - Three small functions in `database.py`: the last run in numbers, the number of Unsorted emails, and the sorting cost this month and in total. "New, not sorted yet" counts the inbox emails the log doesn't have, using the existing `is_processed()`.
+  - The browser tab says just "Inbox Agent" on the home page, and "Action needed · Inbox Agent" and so on elsewhere.
+- **Learned:**
+  - SQL can add things up: `COUNT` and `SUM` total thousands of rows inside the database, so only the totals come back to Python. `COALESCE` turns "nothing to add up" into 0.
+  - A CSS grid lays out cards in columns, and Tailwind's `sm:` and `lg:` prefixes change how many columns there are, depending on the screen's width.
+- **Result:**
+  - 14 tests passed. The home page shows 26 conversations that need me (24 need an action, 5 a reply), 26 new emails not sorted yet, 45 Unsorted, replies waiting "coming in piece 6", 99 emails in the last run (Mon 26 Oct: 87 archived, 12 need me), and $0.00 this month ($1.57 in total, for 6,588 emails). These match the numbers the test worked out separately from the log and Gmail. The cards lead to the right pages, Action needed works at its new address, and with Gmail unreachable the page shows the notice, "?" for new emails and the log's numbers. A faked sign-in ends on the home page with its green message.
+  - A page load takes about 0.4 seconds, like Action needed.
+  - Three cards across on the PC, one on a phone, and nothing sticks out sideways.
+- **Found:** 26 emails in my inbox haven't been sorted yet, and the last run was on 26 October. Sorting needs to be easier to start, which is what piece 3's button is for.
+
+**Piece 2: reading the whole email**
+- **Decided:**
+  - **Prices checked first:** Claude Haiku 5.5 costs $0.10 / $0.50 per million input / output tokens, and Claude Sonnet 5.5 $2 / $10. Triage already uses Haiku 5.5.
+  - **When the full read says a flagged email needs nothing, it's archived,** like any sorted email that doesn't need me. I'm not sorting for real until the History page (piece 5) can undo and rescue, so nothing gets archived before that safety net exists.
+  - **"Where" is only the site's name and web address,** like "Example Site (example.com)", never a clickable link taken from the email. Links in emails can be phishing, and "Open in Gmail" leads to the real link, with Gmail's own warnings.
+  - **Overdue to-dos get a gray "Overdue" tag** and sit after the urgent ones, so the top of the list is for things I can still do.
+  - **No full read for today's to-dos:** they're all overdue, and I'll clear them with an archive button on the page (in What's left).
+  - **Invitations from a real person count as to-dos:** a request to connect, like a LinkedIn connection request, or a document someone shared with me. The rule went into both triage's first look and the full read, which also spell out the look-alikes that need nothing: suggestions of people I might know, and notices that someone accepted my invitation.
+  - **Four parts:** 1 the full read itself, with a dry run; 2 saving the results in the log; 3 urgency, shown on the page and to Claude Desktop; 4 triage running the full read for new emails.
+
+**Piece 2, part 1: the full read**
+- **Built:**
+  - `full_read.py`: the form Claude fills in (needs me: yes, no or unsure; what kind; the steps; where; the deadline; time-sensitive; why), its instructions, and the two readers. Claude Haiku reads every email, and Claude Sonnet reads it again only when Haiku is unsure, and has to decide. If neither gives a usable answer, the email counts as needing me.
+  - A dry run, `python full_read.py`, that prints the first look next to the full read, with the cost, and saves nothing. `--tokens-only` counts the input tokens first, which is free.
+  - `get_message(..., link_hosts=True)` in `gmail_client.py`: the email's text with every link reduced to its site, like `[link: app.example.com]`.
+- **Learned:**
+  - A model cascade: a cheap model handles the clear cases and a stronger one only the hard ones, so the stronger model's price is paid only where it helps.
+  - Counting tokens is free, so the exact input size of a paid run can be checked beforehand.
+  - Turning HTML into text drops the link addresses along with the tags, so an email written only in HTML loses all its links unless they're kept on purpose.
+  - Prompt injection: an email is someone else's text, so the reader treats it as content, never as instructions, and all it can do is fill in a form.
+- **Result:**
+  - Free checks: keeping links as their site makes the text 55% shorter (43,271 characters down to 19,630 for 20 emails), the reader sees 92 links instead of 68, and three emails written only in HTML went from 0 links to 12, 5 and 7. The 30 dry-run emails came to 56,362 input tokens.
+  - The dry run made 31 reads (the 20 newest emails outside the routine labels, my 10 newest to-dos, and one email with a date to test the deadline) for $0.032, about $0.001 each. Haiku decided 27, and Sonnet reviewed 4, at $0.004 to $0.008 each. At about 5 full reads a day, that's roughly $0.15 a month, well under the $0.50 to $1 estimated.
+  - It agreed with the first look 28 times, found nothing the first look had missed, and cleared 3 flagged reads: a LinkedIn connection request (decided by Sonnet) and a shared Google Doc (in both runs). My rules counted both as optional (see Found).
+  - The steps and places were concrete, with the options to pick from, the site to use and the deadline, also when an email wasn't in English.
+  - The three emails read in both runs got the same answer both times.
+- **Found:**
+  - The web address for the same place varies: one signing service came back with three different addresses. The name stays the same, so the page will lead with the name.
+  - "Time-sensitive" was also set when there was a date (a payment request). Urgency will use the date when there is one, and "time-sensitive" only without one.
+  - The "why" sometimes says "you", and sometimes "me" or my name. Asking for "you" throughout, which reads best on the page, is a small change to the instructions.
+  - **Found and fixed: my rules left invitations out.** The dry run cleared a LinkedIn connection request and a shared Google Doc, because the instructions said that things I could do if I wanted need nothing, and never mentioned invitations. It wasn't that I'd accepted the request: the reader only sees the email, not LinkedIn. After the new rule, both invitations count in the first look and the full read ("answer an invitation", now a kind of its own), and three look-alikes still need nothing: a "people you may know" suggestion, an "accepted your invitation" notice and a birthday reminder. That check cost $0.004.
+
+**Piece 2, part 2: the log remembers each full read**
+- **Decided:**
+  - **Full reads get a table of their own, `full_reads`,** by the rules of database design ("normalization") from a data management course I took.
+    - **Two rules allowed either design.** One value per cell (first normal form), and every column depends on the row's key: the whole key, and nothing but the key (second and third normal form). On their own, these allow either a table of its own or new columns on each email's row.
+    - **Optional data decided it.** Most emails never get a full read: all 6,588 sorted before it existed, and the routine labels. New columns would be mostly empty, and optional data is usually better kept in a table of its own.
+    - **So did being a thing of its own.** A full read is an event with its own time, model and cost. On the email's row, it would need a second "model" and "cost" column, told apart by a prefix, which is a classic sign that one row holds two things.
+    - **The cost is small:** the to-do list combines the two tables with a join, and undo deletes from both.
+  - **The steps are stored as JSON,** a deliberate exception to "one value per cell". They're always saved, read and shown together, in order, and never searched or counted one by one. A steps table would be by the book, but more code for nothing gained.
+  - **The full read has the last word:** an email needs me if its full read says yes or, when it has none, if triage's first look flagged it.
+  - Three fixes to the instructions, from part 1's dry run: "where" leads with the name, "time-sensitive" only applies without a date, and the "why" speaks to me as "you".
+- **Built:**
+  - The `full_reads` table in `database.py`, linked to `decisions` by the email's ID with a foreign key. ON DELETE CASCADE removes an email's full read when its row goes, for example with undo. `PRAGMA foreign_keys = ON` switches the link on for every connection, because SQLite leaves it off.
+  - `save_full_read()`. `flagged_emails()` now combines each email with its full read (a LEFT JOIN) and lets the full read decide.
+- **Learned:**
+  - Normalization: first, second and third normal form, and three questions for choosing between a new column and a new table. Can one row have several? Does every row have one (or is it optional)? Is it a thing of its own?
+  - A foreign key links a row to a row in another table, and ON DELETE CASCADE deletes the linked rows along with it. In SQLite, the check is off unless each connection switches it on.
+  - A LEFT JOIN keeps every row of the first table, with empty (NULL) columns where the second table has nothing.
+- **Result:**
+  - 12 tests passed, on a copy of the log:
+    - **The new table** came with every email's row unchanged: 6,588 rows, the same 18 columns.
+    - **The fixes worked.** Six emails re-read with the new instructions, for $0.0096, came back with a payment's deadline and no "time-sensitive", every "where" leading with the name, and every "why" speaking to me as "you".
+    - **Saving and reading back** gave exactly the same full reads, with the steps as a list and the deadline as a date.
+    - **The full read has the last word:** a flagged email whose full read said no dropped off the to-do list, and an unflagged one whose full read said yes joined it.
+    - **The link holds:** a full read for an email the log doesn't know was refused, and undoing a run removed its full reads, with none left behind.
+  - The real log only got the new, empty table: 6,588 emails and 0 full reads. The pages and Claude Desktop's list are unchanged, with 26 conversations.
+
+**Piece 2, part 3: urgency, on the page and for Claude Desktop**
+- **Decided:**
+  - **Urgency is worked out fresh and never saved,** like storing a birthday and calculating an age. The log keeps the deadline, and the recipe in `todos.py` compares it with today on every page load. A deadline on the 10th is normal on the 2nd and turns urgent on the 8th by itself. A saved urgency would go out of date overnight.
+  - **Due today, tomorrow or the day after is urgent.** On 2 November, that means 2, 3 and 4 November. A deadline of today isn't overdue yet.
+  - **The order:** urgent (soonest first), time-sensitive (newest first), overdue (least late first), then the rest (dated ones by soonest date, then undated ones newest first). Overdue stays below what I can still do with a clock on it, but above the rest. The reader already says that a date that has passed needs nothing, so a to-do only goes overdue if it was on my list in time. That makes overdue rows rare and worth seeing: either I really missed something, or I did it and didn't archive the email.
+  - **The form gets one more box: the task in one line.** I looked at the real steps from part 1's dry run, and the first step is often just preparation, like "Open LinkedIn and go to Messaging". Using triage's line instead would take the last word away from the full read, and an email only the full read flagged doesn't have one.
+  - **One tag per fully read email, in specific words:** Reply, Sign, Pay, Verify, Attend, Invitation, and Action for the rest. Replies stay blue and the others amber. A reply on another site counts as a reply, so LinkedIn messages move from "action" to "reply" on the home page once they've had a full read.
+  - **A conversation's date comes from its newest email that gives one.** A newer date replaces an older one, and a reminder without a date doesn't erase it. An archived email's date no longer counts.
+  - **Steps stay folded on every row,** with the "why" in the same fold. It's the quickest way to spot a false alarm.
+  - **"Time-sensitive" lasts until I archive the email.** It has no date, so nothing ends it. I looked at this again with real results: four rows, all one to two weeks old, and three were reminders for the same contract. A 7-day limit would have taken the tag off a blocked booking that still needed me. The clutter comes from the repeats, not the tag.
+  - **A step never copies payment details from an email.** Bank account numbers, payment links, phone numbers and one-time codes stay out of the reader's answer, for the same reason as links: a phishing email's account number would appear on my own page, looking trustworthy. Amounts and who to pay are still shown.
+  - **A conversation stays on the list if any of its emails still needs me,** even when the newest one says no. A false alarm takes a second to dismiss, while letting the newest email decide could hide "please sign by Friday" behind an unrelated note.
+  - **Each task shows once,** rather than once per Gmail conversation. Gmail keeps four reminders for one contract as four conversations, but they're one thing to do.
+    - **The same task means the same sender and the same kind.** On my real rows, that merges one contract's reminders and one person's messages, and nothing else. Exactly the same words wasn't enough, because Claude worded the contract four different ways. Having code compare how alike the wording is can't work either: the contract's pairs (the same task) scored 0.73 to 0.92, and two different messages from one sender scored 0.87, so no cut-off separates them. Asking Claude might be the most accurate, but it means a new box, a new column and more cost per read, so it's an upgrade to consider if this rule makes mistakes.
+    - **Three limits:** kind "other" never merges, because it could be anything. "Reply by email" never merges, because each conversation needs its own reply. Two rows with different dates never merge, like two events from one organizer.
+    - **Nothing disappears.** The row says "+4 more emails", and its fold lists the task's other conversations, each with its date, its line and its own "Open in Gmail". A to-do stays until I archive it, so I need to be able to reach all of them. This also covers the rule's one risk: two different documents from one person, with no dates, would share a row, but both are listed.
+    - **The list counts "to-dos" now, not "conversations",** on both pages, because a row can hold several conversations.
+    - Without a full read there's no kind, so nothing merges: my real page keeps its 26 rows for now.
+  - **Urgent counts** go on Action needed and on the home page's first card, and only when there are some.
+  - **The cost card** becomes one total, "Claude's cost this month", with a small split between sorting and full reads once there are any full reads. It only knows what's in the log: reading an email again replaces its earlier cost, and undoing a run removes its costs. The 60 test reads show as $0.16, while the reads and re-reads really cost $0.20. In normal use, each email is read once.
+  - **How many emails went to each label stays off the home page.** I'd wanted the last run's card to show this, but a normal day has about 5 labels and a run after a gap had 13, which either stretches the cards or hides some behind a click. The home page answers "does anything need me, and is the agent working?", and the split doesn't change what I do next. It goes on the History page (piece 5), and since the log stores each email's run and label, nothing is lost by waiting.
+  - **`list_todos()` is told today's date,** like the two lists it's already given. Normally it uses the computer's date, but a test can ask what the list will look like on 9 November without waiting until then.
+  - **The test on real data comes with the page,** reading all 60 flagged emails on a copy of the log, rather than only the newest email per conversation, so the date rule above can be seen on real conversations.
+- **Built, the recipe and the log:**
+  - `what_to_do` on the form in `full_read.py`, printed by the dry run. When neither model answers, it says "Check this email yourself".
+  - In `database.py`: a `what_to_do` column in `full_reads`, added by a small migration, which `save_full_read()` fills in and `flagged_emails()` reads. A log made before this gets the column the first time it's opened, and a new one is created with it, in the same position.
+  - In `todos.py`: the new fields on `Todo` (kind, steps, place, why, deadline and urgency), `_urgency()` and `_position()`. The full read's kind now decides between reply and action, which fixes the empty tags for an email only the full read flagged.
+- **Built, the Action needed page:**
+  - `action.html`: a tag for how pressing a to-do is (a red "Urgent", a red outline for "Time-sensitive", a gray "Overdue"), a tag for its kind, a line with the date and place, the steps and the "why" in a fold, and urgent and overdue counts next to the heading. A small macro draws the tags.
+  - `show_deadline()` in `web/app.py`: "Due today", "Due tomorrow", "Due Tue 10 Nov" or "Was due Fri 6 Nov". The tag column got wider so "Time-sensitive" fits. That and the word "to-dos" are the only changes on the real page while the log has no full reads.
+- **Built, each task once:**
+  - `_one_row_per_task()` and `_same_task()` in `todos.py`, which run after the conversations have their rows, and a small `OtherConversation` for each merged conversation.
+  - The "Also about this" list in the fold in `action.html`, with one macro for every "Open in Gmail" link. The links now stay in one piece instead of breaking across lines.
+- **Built, safer answers from the reader, in `full_read.py`:**
+  - The rule against copying payment details, in the reader's instructions. It adds 91 input tokens to each read, about 1 cent a month.
+  - `remove_invisible()` and a `CleanText` type for the form's text boxes. Claude still sees a plain form, and the cleaning happens as the answer arrives.
+  - `_ask()` asks the same model once more when an answer had invisible characters, and adds up the cost of both requests. Line breaks and tabs don't count, because cleaning only turns those into spaces.
+- **Built, Claude Desktop's list, in `gmail_mcp_server.py`:**
+  - `list_todos` now gives the same rows in the same order as the page, with the kind, steps, place, why, deadline and urgency, and each of a task's other conversations with its own Gmail link. Dates become text, because a tool's answer travels as JSON, which has no dates.
+  - Its description, which is what Claude reads, explains the urgency words and says to use them as they are. It also says never to offer the place or the steps as links, because links in emails can be phishing, and that `gmail_link` is the way to the real link.
+- **Built, the home page:**
+  - The first card shows "2 urgent · 1 overdue" when there are some, with the urgent part in red.
+  - `last_run_summary()` in `database.py` now lets the full read have the last word, the same rule as the to-do list, so "12 need you" can't disagree with the list once part 4 runs.
+  - `full_read_costs()` in `database.py`, which the cost card adds to the sorting costs.
+- **Learned:**
+  - A value that can be calculated usually shouldn't be stored, because the stored copy can go out of date. Here it would be wrong by the next morning.
+  - A function that looks at the clock by itself is hard to test. Handing it the date as an input makes it easy, and it's the same reason `list_todos()` is handed its two lists.
+  - Python sorts by several things at once when each row's sort key is a tuple, and a sort that keeps ties in their original order (a "stable" sort) means undated rows stay newest first with no extra code.
+  - Git can act as a test: running the previous version of a file from Git next to the new one shows whether anything changed that shouldn't have.
+  - `<details>` gives a fold with no JavaScript, and a Jinja macro is a reusable piece of template, like a function.
+  - A price estimate is only as good as its sample. One measured average from a different mix of emails can be off by a factor of three.
+  - Text can hold characters you can't see. Unicode files them under "other", and some can make text display backwards. Checking a page in the browser found what the terminal had hidden.
+  - In SQL, a comparison with an empty value (NULL) gives NULL rather than no, and adding up nothing but NULLs gives NULL rather than 0. `COALESCE` handles both, so a run with nothing flagged says 0 instead of showing "None need you".
+  - A Pydantic validator can clean a value as it arrives, without changing the form the model is shown.
+  - Fake replies can test every path of a retry, like a second answer that also fails, without paying for it or waiting for a rare glitch. They can't prove it works with a real reply, so one real read is still worth it.
+- **Result:**
+  - 75 tests passed, with no paid Claude calls and nothing changed in Gmail:
+    - **Urgency:** every day around the boundaries, a new year, and a date beating "time-sensitive".
+    - **The order:** ten made-up rows came out in exactly the decided order, and rows moved by themselves when the test changed the date.
+    - **The full read's last word:** an email only it flagged has its kind, text and steps, and each of the 8 kinds counts as exactly one of reply or action.
+    - **A conversation's date:** a reminder keeps the older date, a newer date replaces it, and an archived email's date doesn't count.
+    - **The log, on a copy:** the column arrived once and stayed, all 6,588 rows and their 18 columns were unchanged, and a brand-new log has the same columns in the same order. On the copy, with hand-filled forms, a to-do due on the 10th was normal on the 2nd, urgent on the 9th and overdue on the 11th, and a euro sign in the steps survived saving and reading back.
+    - **Nothing changes yet:** with 0 full reads, the old recipe from Git and the new one gave the same 26 conversations, in the same order, with the same fields. Action needed and the home page still load on a real server using a copy of the log.
+  - The tests didn't touch the real log: its file was identical before and after. It got its empty column when my own server next opened it, and it still has 6,588 emails and 0 full reads.
+  - **The page, 48 more free tests with hand-filled forms on a copy:** every kind gets the right word and colour, the order and counts are right, every fold starts closed, and an email only the full read flagged gets its kind's tag and text. Planted `<script>` tags, an image and a link to a fake site all showed as plain text: the only link in that row was Open in Gmail. With no full reads, the page still has the same 26 rows and tags.
+  - **Real reads, on a copy of the log:** all 60 flagged emails for $0.163, with nothing changed in Gmail and the real log still at 0 full reads.
+    - **The list shrank from 26 conversations to 19.** 18 of the 60 emails needed nothing, and 7 conversations left the list completely: two expired codes or links, a flight that had already left, an application that had closed, a receipt, a bank's notice and an optional event profile.
+    - **The new one-line box did its job,** with the real task instead of a first step.
+    - **Each task once:** 59 more free tests, and the real reads went from 19 rows to 13, with one contract (5 emails in 4 conversations) and one person's messages (7 emails in 4 conversations) on one row each. Two different messages from one sender, and four different buyers on a marketplace, stayed apart. No email got lost: the rows still add up to all 42 emails that need me, and all 19 conversations can be reached, with 19 links that all go to Gmail.
+    - **The cleaning:** 38 more free tests, including a raw answer with backspaces and a backwards-text character, run through the Anthropic SDK's own parsing the way a real answer arrives. On the 272 pieces of text in the real reads, only the one with backspaces changed, and text with €, ®, accents, Japanese, Arabic and emoji stayed as it was.
+    - **On a test server,** today's list starts with three time-sensitive rows, then a to-do with a real date. Pretending it was the day before that date turned it urgent by itself ("Due tomorrow"). Three other dates were planted to show the other states, like a "Was due" date on a gray Overdue row. Every link in the list goes to Gmail, and nothing sticks out sideways on a phone.
+    - **Asking again:** 57 more free tests with made-up replies, built from the Anthropic package's own types, for both models. It asks again for invisible characters in any text box, stops after two requests, adds up the cost, keeps the first answer if the second is unusable, and doesn't ask again for line breaks, €, Japanese or emoji. One real read of an email ($0.008) went through Haiku and Sonnet without a problem and came back clean.
+    - **Claude Desktop's list:** 43 more free tests over real MCP, the way Claude Desktop uses the server, with the real server on copies of the log. It gave the same 13 to-dos in the same order as the page, on today's date and on a pretend 9 November, with dates as text and 19 different Gmail links. `read_thread` works with another conversation's ID. With no full reads, it's the same 26 entries, newest first, with those fields empty. It's still 4 tools and read-only. This doesn't show how Claude itself uses the new fields: Claude Desktop reads my real log, which has no full reads until part 4.
+    - **The home page:** 35 more free tests. With no full reads, it shows the same numbers as before (26 to-dos, 24 actions, 5 replies, 99 sorted, 87 archived, 12 need you). With the real reads, it shows 13 to-dos, 7 actions and 6 replies, and "$1.73 in total: $1.57 for sorting 6,588 emails, $0.16 for 60 full reads". A full read's no takes one off the last run's "need you", and a yes adds one. Pretending it was 9 November showed "2 urgent · 1 overdue", matching Action needed, and with only one of them there's no stray dot.
+  - **In total,** 355 free tests pass, and the paid tests cost $0.203: $0.163 for the 60 reads and $0.040 for re-reading a few emails.
+- **Found:**
+  - **The new box costs more than I estimated.** Token counting, which is free, shows it adds 152 input tokens to each read, because the form's text is sent with every request. With a short answer and Sonnet's reviews, that comes to about 1.5 cents a month at 5 reads a day, rather than the fifth of a cent I'd worked out by counting only the answer. That's still well within budget.
+  - **The test cost almost three times my estimate:** $0.163 instead of about $0.06. Sonnet reviewed 23 of the 60 emails, against 4 of 31 in part 1, and those 23 took 90% of the spending. 17 of those 23 were very short messages from old second-hand sales, where Haiku couldn't tell what was still open. Without those, a read cost about $0.002. At 5 reads a day, that's about $0.30 to $0.40 a month rather than $0.15, still under the $0.50 to $1 first estimated.
+  - **The reader only sees one email at a time.** In three conversations on a marketplace site, the newest email said no (just a thank-you) and an older one said yes, so the conversation stays on the list. My answers on that site don't reach Gmail, so the reader can't know I've replied.
+  - **Found and fixed: the same task filled several rows.** One contract's reminders and one person's LinkedIn messages are separate Gmail conversations, so they took 8 of the 19 rows, with three of the reminders near the top.
+  - **Found and fixed: a step can copy payment details from an email.** One read put a bank account number in its steps. It's plain text, but it's the same risk as a link. One rule in the reader's instructions fixed it, on the third wording: the first two made another email's steps mention details it doesn't have. Now such a step says "using the account number in the email", and a payment handled on a company's own site points there. The three rounds cost $0.032.
+  - **Gmail's inbox check occasionally fails for a moment.** Across all the test runs, a few page loads got "Couldn't reach Gmail", and the next load worked. The page did what it should: it showed its notice and everything it could. 40 direct checks in a row all worked, about 0.4 seconds each, so I haven't found the cause.
+  - **Reading the same email twice can differ in the details.** Across those re-reads, one email's "time-sensitive" went from no to yes, while the decision itself stayed the same. This is what the accuracy tests in Step 8 are for.
+  - **Found and fixed: an answer can contain invisible characters.** I first took "alance" in one answer for a typo, because the terminal hid what was wrong. On the page, the same word showed small boxes: Sonnet's text had two backspace control characters, one where the "b" should be and one in the middle of the word, and no "b" at all. It's 1 of the 272 pieces of text in the reads, but it matters beyond looks, because some invisible characters make text display backwards, so a fake address could pass for a real one in the "where" line. The form now removes them from all its text as each answer arrives. Cleaning alone can't bring back a missing letter, and the word read "alance", so when an answer has invisible characters, the reader now asks the same model once more and uses the second answer. A second answer with them would still be cleaned. Re-reading that email for real gave the whole word.
+
+**Piece 2, part 4: triage runs the full read**
+- **Decided:**
+  - **The full read has the last word on what gets archived.** A flagged email whose read says no is archived, and an unflagged one whose read says yes stays in the inbox and joins the list. An email no label fits stays in the inbox either way, for the Unsorted page. The log keeps the first look's answer next to the full read's, so the accuracy tests in Step 8 can compare them.
+  - **Emails older than 30 days get no full read.** They're archived whatever they say, so the answer wouldn't change anything.
+  - **If one email's read fails, that email is skipped and the run carries on.** It stays untouched in the inbox, the next run tries it again, and the summary names it. Stopping would let one odd email block every email after it, on every run. Anything unexpected still stops the run, so a real bug shows up as one.
+  - **A dry run does the full reads too,** so it shows exactly what a real run would do. It skips emails already in the log, or it would pay to read them again.
+  - **The steps live in shared functions,** `sort_email()` and `apply_sorted()`, because the Sort button in piece 3 needs the same steps, the way `todos.py` serves both the page and Claude Desktop.
+  - `backlog.py` stays as it is. The backlog is finished, and if it ever runs again, it uses first looks only.
+  - **A warning that something I use or pay for will stop, expire or close unless I act counts as an action,** in both the first look and the full read. Sales that only sound urgent still don't. Missing one is worse than a false alarm.
+  - **No real information in this README's examples or in the code:** no names, companies, booking or contract names, amounts or dates of real events. They go to GitHub, so examples are generic or left out.
+- **Built:**
+  - In `triage.py`: `sort_email()` decides about one email without changing anything, `apply_sorted()` carries it out in Gmail and the log, and `should_archive()` listens to the full read. The output shows each email's full read and what happens to it, and the summary shows how many reads there were, what they cleared and found, and the cost of the first looks and the reads.
+  - **Found and fixed, in `full_read.py` and `triage.py`:** an answer cut off partway crashed the run. My code's comment said it counted as no usable answer, but the Anthropic package raises an error when it reads broken JSON. Now it's what the comment said: the next model tries, and if neither gives a usable answer, the email counts as needing me.
+  - **Found and fixed, in `database.py`:** the last run's "need you" also counted old emails that were archived anyway, so the card could disagree with the list. It now counts only emails still in the inbox.
+- **Learned:**
+  - A stand-in (a "mock") replaces the code that would change Gmail with code that only notes what it was asked to do, so the real `--apply` path can run on real emails with no risk.
+  - The order of saving matters with a foreign key: the email's row has to exist before its full read can be saved.
+  - Skipping or stopping is a real design choice, and which errors to catch is part of it. Catching only the expected ones keeps real bugs visible.
+- **Result:**
+  - 126 more free tests, with made-up emails and stand-ins for Gmail: every outcome in the plan, a failed read of each type, a run after a failed one, emails already sorted, cut-off answers, undo and `backlog.py`. In total, 489 free tests pass.
+  - **My 34 real new emails, with stand-ins for every change to Gmail, saved only to a copy of the log:** $0.0217, in 80 seconds (about 2.3 seconds per email). 16 got a full read, all decided by Haiku. 33 would be archived and 1 stays: a LinkedIn connection request. My real inbox had 94 emails before and after, and the real log still has 0 full reads.
+  - On a test server, the home page and Action needed show that run: 27 to-dos with the new request on top, 0 new emails, 34 sorted in the last run (33 archived, 1 needs me), and $1.59 in total: $1.58 for sorting and $0.01 for the reads.
+  - **The rule about warnings, on 10 real emails, for $0.0157, with nothing saved:** a low-credit warning and two expiring-password warnings now count as to-dos. An email saying that something ends by itself and needs nothing stayed a no, and so did a free trial ending, a discount, a saved job expiring, a trial offer and two automatic payments. Each email was read as if it were the day after it arrived, so an old warning wasn't dismissed just for being old.
+- **Found:**
+  - **Clear emails are very cheap to read:** $0.0003 each with no Sonnet, against $0.0027 for the old marketplace messages. First looks cost more than I'd assumed, though: $0.0005 each, not $0.00024, because the backlog ran at half price through the Batches API. At about 10 emails a day, sorting should cost about $0.20 to $0.50 a month in total.
+  - **On these emails, the full read changed no decision.** The first look and the read agreed on all 16. What the read added here was what to do, the steps and the place.
+  - **Found and fixed: the reader missed what a warning means.** A warning that an account's credit was running low, and that a service would stop without more, got "no": it read as information, because my rules didn't cover warnings. It would have been archived.
+  - **A date can be in a different email.** A later email from an airline gave the date of a flight, but the to-do came from an earlier email with no date, so the list can't show it as urgent. It's the same limit as above: the reader sees one email at a time.
+
+**Piece 3: the "Sort new emails" button**
+- **Decided:**
+  - **The page shows progress while sorting.** Sorting takes about 2.3 seconds per email, so the button starts the work on a second thread and the page asks how far it is once a second, like a buzzer in a café instead of standing at the counter. A live stream from the server would be smoother but more complicated, with no real gain at this speed.
+  - **The button sorts for real.** I won't press it until the History page exists, as that's where undo will be. Until then, `undo.py` can reverse a run.
+  - **The summary gives the numbers and names the new to-dos,** up to 5, with a link to Action needed. The full list of every email belongs on the History page.
+  - **One click stops at $0.50.** That only happens on an unusual run. The rest stays new, and the summary says so.
+  - **No Stop button for now.** A normal run is short, and the limit covers the long ones.
+  - **A secret code on every button that changes something** (a "CSRF token"), rather than only checking the labels browsers put on requests. Both are accepted by OWASP, the main web security guide. The labels would be less code, but the code is the conventional method, works in any browser, and is what I'd meet in a company's web app.
+    - **I wrote it myself, following OWASP's "synchronizer token pattern".** OWASP says to use a framework's built-in protection if it has one, and FastAPI doesn't. The two common add-on packages use a signed cookie with no tie to a session, which OWASP now says gives "minimal protection", and one hasn't been updated since 2023.
+    - **The code isn't in a cookie,** because browsers send cookies to the app by themselves, whoever asked them to. The cookie only holds a random session ID. The code stays on the server and in the page's HTML, which other websites can't read.
+    - **Two extras OWASP also recommends:** a request saying it came from another website is refused even with the right code, and the session cookie has `SameSite=Lax`.
+  - **HTMX comes from my own app,** like the CSS and the font, with the features I don't use switched off, such as running code from attributes and keeping copies of pages in the browser.
+- **Built, the protection:**
+  - `web/csrf.py`: sessions, the secret code and `protect_against_other_websites()`, which runs for every request, so a new button is protected without having to remember it. Refusals are written to the server's log.
+  - In `web/app.py`: `TrustedHostMiddleware` only answers requests addressed to this computer. Without it, a website could point an address of its own at 127.0.0.1 ("DNS rebinding") and read my pages as if they were its own.
+  - `base.html` gives every HTMX request the code as a header, and the sign-in form has it in a hidden field. A page from before a server restart gets refused, and HTMX reloads it.
+  - `web/static/htmx.min.js`, version 2.0.11, 52 KB. `python-multipart` is now in `requirements.txt`, because the app reads forms itself.
+- **Built, the button and its progress:**
+  - `web/sorting.py`: `start()` begins a run on a second thread, unless one is already going. That thread finds the inbox emails the log doesn't have, and handles them newest first with the same `sort_email()` and `apply_sorted()` as `triage.py`. It makes its own Gmail and database connections, because neither can be shared between threads.
+  - Two new addresses in `web/app.py`: `POST /sort` starts a run and answers straight away, and `GET /sort/status` says how far it is. When the run is over, it tells the page to reload, so the numbers are up to date.
+  - `_sort_button.html` and `_sort_status.html`, pieces of template that every page includes, and that HTMX can also replace by themselves. So opening any page during a run shows the progress and a greyed-out button.
+- **Built, the summary and what happens when things go wrong:**
+  - The summary shows once, on the next page drawn: the numbers, the cost, and the new to-dos by name, up to 5, with a link to Action needed. It's green normally, amber at the spending limit and red if the run had to stop.
+  - `explain()` in `web/sorting.py` turns errors into words that say what to do, like an ended Gmail login, no internet, or no Claude credit. Anything unexpected only gets its type on the page, because the details could be long or come from an email. They're in the server's log.
+  - The $0.50 limit is checked before each email, and the summary says how many are still new. Skipped emails get a line of their own.
+- **Learned:**
+  - A second thread is the "buzzer": the page can answer straight away while the work goes on. The two sides share one small object, which only the thread writes to.
+  - A thread needs to catch every error itself. If it doesn't, it just ends, and the page says "sorting" forever. So it catches everything, writes the details to the server's log, and reports that the run stopped.
+  - Polling with HTMX is one attribute, `hx-trigger="every 1s"`, and an answer can also update a second part of the page ("out of band"), which is how the click greys out the button in the top bar.
+  - A lock makes checking and starting one step, so two clicks at the same moment can't both start a run.
+  - CSRF: any website can make my browser send a request to my app, with my cookies, even though it can't read the answer. So what protects a button is something only my own pages can know.
+  - The same-origin policy is what makes that work: a page can send a request to another address, but it can't read the answer, so it can't steal the code. In the browser test, that's what blocked the attempt to read my page.
+  - A custom header gives extra protection, because a browser won't send one to another address without asking that server first, and my server doesn't agree.
+  - Comparing secret codes with `secrets.compare_digest` takes the same time wherever the first difference is, so timing can't give a code away.
+  - "Middleware" is code that runs around every request, which makes a protection the default instead of something to remember for each address.
+  - A library isn't automatically the safer choice: it pays to check when it was last updated, and whether its method still matches current advice.
+- **Result:**
+  - HTMX matched its published fingerprints: npm's for the package, and the one in HTMX's docs for the file. The copies from npm and jsDelivr were byte-for-byte the same.
+  - 80 free tests with forged and real requests. 15 kinds of forged request were all refused with nothing happening, such as no code, a guessed code, another session's code, the right code from another website, and `Origin: null`. Real requests work with the code in a form or in a header. A wrong address gets no page. Sessions can't grow without end, and a restart only means reloading the page.
+  - **In a real browser:** a page on another address sent hidden forms and scripts at the sign-in button. The server refused every POST, and the sign-in never started. The browser itself blocked the request with the secret header and the attempt to read my page. Pressing the real button on the app's own page still worked, and so did an HTMX request.
+  - Scripts on the page can't read the session cookie, and the browser loaded nothing from outside.
+  - **The button, 54 free tests with fake emails, fake answers and stand-ins for Gmail:** a click is answered straight away, and the worker can be paused midway to check what the page shows. "Sorting 1 of 4" appears on every page, which all keep working during a run. Pressing again, or 8 clicks at the same moment, still gives one run. A forged click starts nothing. The right emails get archived, and the cost adds up. When the login has ended, Gmail stops answering midway, or Claude can't be reached, it stops, says why and keeps what's done, and an unexpected bug can't leave it stuck on "sorting".
+  - **In a real browser, on a test server with stand-ins:** the progress counted up by itself, the button greyed out, and the page then reloaded with the summary and new numbers. Only the stand-in was asked to change anything.
+  - **The summary, the limit and the errors, 38 more free tests:** it names 5 to-dos and says "and 2 more", repeats none, and a to-do trying to be code shows as plain text. At the limit, it stops once it passes $0.50, and the next press carries on with the rest. 13 kinds of failure each get the right words, and the details of an unexpected bug stay out of the page.
+  - **The real button with my 35 real new emails, on a test server, with stand-ins for every change to Gmail and saved only to a copy of the log:** $0.023 in about 85 seconds, or about 2.4 seconds per email. It sorted them into 9 labels with 17 full reads, all decided by Haiku. 33 would be archived and 2 stay, and the summary named both: a connection request and a low-credit warning, which the new rule now catches. The home page then showed 0 new emails, 35 sorted in the last run, and the new total cost. My real inbox had the same 95 emails before and after, and the real log still has 0 full reads.
+  - In total, 661 free tests pass.
+- **Found:**
+  - **I haven't pressed the real button on my real inbox,** on purpose. That waits for the History page, so the real Gmail changes behind the button have only been tested with stand-ins. The same Gmail code did run for real in Steps 4 and 5.
+  - **A normal day should take about 25 seconds to sort,** at about 10 emails a day. That's short enough that I don't need to read emails at the same time, which would add complexity and risk hitting rate limits.
+
+**Piece 4: the Unsorted page**
+- **Checked first, read-only:**
+  - **The 45 Unsorted emails in the log are all archived,** in the log and in Gmail, because each was older than 30 days when the backlog was sorted. All 45 still exist in Gmail under Unsorted.
+  - **New ones will be rare:** about 1 in 150 overall, and none in my last normal run of 99 emails. At about 10 emails a day, that's one every two weeks at most, so this page is mostly a one-time clean-up.
+  - **18 of the 45 are about one theme, worded 9 different ways,** because Claude sees each email alone. Another 12 are bounce notices or blank emails, where no label helps.
+  - **A running server wouldn't notice a new label.** `triage.py` reads `labels.json` once, and `--reload` only watches `.py` files. Those emails would keep landing in Unsorted, with no warning.
+  - **`undo.py` trusts the log.** It removes whichever label the log names, so if the log still said Unsorted after a change, undo would leave the new label on the email.
+- **Decided:**
+  - **Both kinds of email on one page,** in two groups: those in my inbox first, then the older ones, with the same rows. Step 4h decided to make choosing a label by hand easy, so the 45 belong here too.
+  - **Reject means "no label needed, stop asking".** The email stays under Unsorted in Gmail and leaves the page. If Reject only removed the suggestion, the bounce notices and blank emails could never leave.
+  - **After my choice, an inbox email follows the same rule as sorting:** it leaves the inbox unless it needs me, however old it is. The 30-day rule is only for first-time sorting. An older email stays archived.
+  - **A change is recorded as a current value plus a history,** like a bank balance and its statement. `decisions.label` always holds the label now, so `undo.py` and the pages stay right. A new table, `label_changes`, gets one row per change, with the label before and after. Only overwriting the label would lose Claude's answer and what I changed, and never changing `decisions` would make everything look in two places. Step 8's accuracy tests can use this too, because Claude's answer next to mine is an answer key.
+  - **No Undo button on this page.** I won't use the web page until the History page is up, so undo arrives there, in piece 5. The log records everything it will need.
+  - **Undoing a whole run reverses my hand changes too,** so everything goes back to how it was before that run, and `undo.py` needs no change. I can revisit this in piece 5, when History can warn me first.
+  - **New labels stay in `labels.json`,** saved by writing a temporary file and swapping it in with one move, so a crash can't leave half a file. A company with many users would use a database table, but a file is normal for one person's tool, and I can still edit it by hand.
+  - **The labels get read at the start of every run,** like a recipe card you read as you start cooking: change the card and the next meal uses it, while the one on the stove carries on. Asking me to restart the server would also stop a sort in progress, and overwriting shared variables could leave a running sort with instructions and allowed answers that disagree.
+  - **A new label gets checked before it's saved.** Claude writes a suggestion after reading an outside email, and once approved, it joins the instructions for every future email ("stored prompt injection"). So invisible characters come out, it has to fit on one line within a length limit, and what I see is exactly what gets saved. A name that differs only in capitals from one I have counts as that label, and a `/` is refused, because that's how Gmail puts one label inside another.
+  - **Only the changed row updates, with HTMX,** so I keep my place in a long list. A new label reloads the page, so every row's dropdown has it.
+  - **No preview of each email.** The log doesn't have one, and asking Gmail about every row on each page load isn't practical (see Found below). Open in Gmail is there instead.
+  - **Smaller choices:** one row per email, since only one conversation has two Unsorted emails. A dropdown plus a Move button, so a slip can't change Gmail, with the labels in alphabetical order. After a move or a reject, the row says what happened until the page is next loaded. Reject takes one click with no "are you sure?", because the email stays under Unsorted in Gmail and piece 5's undo can bring it back. Approving moves only that email. A new label counts as non-routine, so its emails get a full read. No selecting many at once, given how few emails arrive after the clean-up.
+- **Built, part 1: the list, read-only:**
+  - `unsorted_emails()` in `database.py`: the emails labelled Unsorted, newest first, with whether each one needs me, by the same rule as the to-do list.
+  - `unsorted()` in `web/app.py`: asks Gmail once what's in my inbox, gets the emails from the log and splits them into the two groups. When Gmail can't be asked, the log's record of what the agent last did decides, and the page's notice says so.
+  - `unsorted.html` draws the groups, and `_unsorted_row.html` one email: subject, sender, date, Claude's reason, the suggestion in full and Open in Gmail. A row is a template of its own, so the buttons coming next can replace one row by itself.
+  - `_macros.html`: the coloured tag and the Gmail link moved out of `action.html`, so both pages share them.
+- **Built, part 2: moving an email to a label I already have:**
+  - **First, a backup:** a copy of the log and `labels.json` in `backups/`, because neither is in Git, and this part starts writing to the log from a button. Git ignores the folder, as it holds the same private data.
+  - `label_changes`, the new table in `database.py`. `save_label_change()` writes its row and the new label in `decisions` with one commit, so a crash can't save only one of them.
+  - `move_to_label()` in the new `web/labelling.py` does the work behind the button, in the same order as sorting: first Gmail, then the log. It asks Gmail which labels the email has right now instead of trusting the log, because I may have changed it myself since. That decides whether the label gets added, which undo needs to know, and whether there's an inbox to leave. A lock lets one change run at a time, so two clicks at once can't both change an email.
+  - `current_labels()` in `gmail_client.py` asks for an email's labels and nothing else. `explain_failures()` can now be used outside that file, and it knows a new `EmailGoneError`, for an email deleted from Gmail.
+  - `POST /unsorted/{message_id}/move` in `web/app.py`: the answer replaces the row, and also updates the count at the top ("out of band"). If something goes wrong, the answer only fills the row's own place for a problem, so the label I chose stays selected. When the login has ended, the page reloads, because a row has no room for the sign-in button.
+  - Each row has a dropdown of my labels, read fresh from `labels.json` for every page load, and a Move button that greys out during the click. The dropdown starts on "Choose a label…", and the browser won't send the form until one is chosen.
+- **Built, part 3: rejecting a suggestion:**
+  - `reject_suggestion()` in `web/labelling.py`: the email stays under Unsorted in Gmail, and `label_changes` gets a "rejected" row, with Unsorted before and after. It still asks Gmail whether the email is in my inbox, because it leaves on the same rule as a move. An email that isn't in Gmail any more has nothing to change there, so the answer just gets recorded, which is also the way to clear such an email off the list.
+  - `_WAITING_FOR_LABEL` in `database.py`: "waiting for a label" now means Unsorted and not rejected, written once and used by the list, the lookup behind the buttons and the home page's count. Whether I've rejected an email is only kept in `label_changes`, not copied into `decisions`, so the two can't disagree ("normalization", the same reason `full_reads` has its own table).
+  - Each row has a Reject button, then "or move to". An email with no suggestion has "No label needed" on the button instead. Both buttons go through `change_row()` in `web/app.py`, so they deal with Gmail's problems in the same way.
+- **Built, part 4: reading the labels at the start of each run:**
+  - `SortingRules` and `read_sorting_rules()` in `triage.py`: what one run sorts by, made from `labels.json` when it starts, namely the labels, Claude's instructions and the allowed answers. The run hands them down to each email, so a run that's already going keeps its own.
+  - The Sort button reads them on each press, and `triage.py` and `backlog.py` when they start. The shared `LABELS`, `SYSTEM_PROMPT` and `TriageResult` are gone, so nothing can use an old copy by mistake.
+  - Nothing looks different on the page. It's what lets part 5's new labels work without a restart.
+- **Built, part 5: approving or editing a suggestion:**
+  - `add_label()` in `triage.py`: the safe save. It writes `labels.json.tmp`, makes sure that has reached the disk, then swaps it in with one move (an "atomic write"). A lock lets one thread at a time read or save, because Windows refuses to replace a file while it's being read. Git ignores the temporary file, as it holds the same private text.
+  - `approve_suggestion()` in `web/labelling.py`: the new label goes to Gmail first, then `labels.json`, then the email moves, then the log, so a problem in Gmail leaves the file alone. A name I already have just moves the email. The log says whether I approved or edited, and an edit that changes nothing still counts as approved.
+  - `clean()` and `_check_new_label()` beside it: invisible characters and line breaks come out, a name can be up to 40 characters and a description up to 700 (my longest is 643, and Claude's suggestions are far shorter). Claude's own suggestion goes through the same checks, and the row shows it cleaned, so what I read is what gets saved.
+  - `create_label_if_missing()` in `gmail_client.py`: it reuses a label of mine with the same name, capitals aside, under Gmail's spelling. It refuses Gmail's own labels, like `INBOX`, and says so if Gmail turns a name down.
+  - `label_changes` gets a `label_created` column, added to older logs by a migration, so piece 5's undo can tell which click added a label.
+  - **On the row:** an Approve button and an Edit fold, which is a `<details>` under the suggestion rather than a button, because a fold needs no JavaScript and keeps what I typed if a click fails. The row's own Approve hides while the fold is open. Once I have a suggested label, for example after approving it on another row, the button becomes "Move to [label]".
+  - A new label reloads the page, so every dropdown has it, and a green message then says what happened. `what_happened()` in `web/app.py` writes that sentence for every button.
+- **Learned:**
+  - When moving code shouldn't change anything, compare before and after (a "regression test"). I drew Action needed with the committed templates and the new ones, on the same data, and compared the results.
+  - A template's escaping isn't the same as Python's `html.escape`: an apostrophe becomes `&#39;` instead of `&#x27;`. Four of my checks first failed on apostrophes, and the page was right. A failing test can be the test's fault, so it pays to find out which before changing anything.
+  - A "transaction" is several writes to a database saved by one commit, so it's all or nothing. To test it, I made the second write fail, and the first one wasn't saved either.
+  - A request's body can only be read once, like a tape that doesn't rewind. A framework can keep a copy, but only if it's asked to (see Found below).
+  - A stand-in can sit low down: mine mimics Gmail's API itself, so the real functions in `gmail_client.py` and the real `undo.py` ran on top of it.
+  - SQL's `NOT EXISTS` asks "is there no such row in this other table?" Unlike a join, it can't change how many rows come back, however many rows the other table has for that email.
+  - A value worked out when a file is imported stays fixed until the program restarts. Settings that can change belong at the start of each job instead, so a job never sees them change halfway.
+  - A Pydantic class can be made inside a function, so its allowed values can come from a file read at run time.
+  - The Anthropic library lets a test replace its connection. The real library code still runs, nothing leaves the computer, and the test can see the exact bytes it would have sent. Loading the committed code next to the new code then proves a change altered nothing, which is stronger than checking that the answers still look right.
+  - An atomic write isn't enough on Windows, which refuses to replace a file while anything has it open. I measured this: with 4 threads reading, 298 of 300 saves failed with `PermissionError`, and with a lock around the reads and saves, none did.
+  - Looking at a page finds what tests don't: all the tests passed, and a screenshot then showed two Approve buttons with the fold open, where the wrong one would have thrown away my edits. Tests check what I thought of.
+  - CSS can react to a page's state with no JavaScript: `:has(details[open])` hides that button while the fold is open.
+  - Text written by a model after reading an outside email is untrusted, even when a person approves it, because a person can't see invisible characters. Cleaning it before showing it is what makes the approval mean something.
+- **Result:**
+  - **66 free tests, on a copy of my real log with stand-ins for Gmail:** all 45 are listed newest first, with descriptions and reasons in full. "Needs you" only shows in the inbox group, and the full read has the last word on it. Gmail gets asked once per page load.
+  - When the login has ended, Google can't be reached, or Google has a problem, the page keeps its list and shows the right notice. Text trying to be code shows as plain text in all five places it can appear. An email with no suggestion doesn't say "None", and with no known account there's no link.
+  - Action needed came out the same with the old and new templates, on 28 rows, apart from spaces and the secret code.
+  - **In a real browser, with made-up emails:** the layout works at desktop and phone width, the page is no wider than a phone, nothing loads from outside, and the console shows no errors.
+  - My real log, `labels.json` and `token.json` stayed byte-for-byte the same.
+  - **Part 2, 149 free tests, on a copy of my real log with a stand-in for Gmail's API:**
+    - **The rules:** an old email stays archived. A new one leaves the inbox unless it needs me, and the full read has the last word. An email that already had the label, or that I'd archived myself, is noted as such.
+    - **The log:** a page load adds the new table to an older log and keeps all 6,588 emails. Each move saves one row with the label before and after.
+    - **Clicks:** 8 clicks at the same moment gave one move and one change in Gmail. A second click, a made-up email or a label that isn't mine changes nothing and doesn't reach Gmail.
+    - **Gmail failing:** each of its 3 requests failed in 7 different ways. The row says why, nothing is recorded, and the same click works once Gmail does. An ended login reloads the page, and an email deleted from Gmail gets its own message.
+    - **Other websites:** 6 kinds of forged click were refused, including the right code from another website.
+    - **`undo.py`, with its real code, on what had been moved:** the new label comes off unless the email already had it, Unsorted isn't put back, and emails return to the inbox exactly when they should. The log forgets those emails and their changes, so they get sorted again.
+  - **Part 2, in a real browser, with made-up emails and a stand-in for Gmail:** with no label chosen, nothing gets sent. A click greys out the button, replaces the row and updates the count without reloading the page. "Orders & Payments" arrives intact. When the stand-in failed on purpose, the problem appeared in the row with my choice still selected, and the same click then worked. An ended login reloaded the page with the sign-in button. It all fits at phone width, and the console shows no errors.
+  - **Part 3, 100 free tests, the same way:**
+    - **The rules:** a rejected email stays under Unsorted in Gmail and leaves the list. An old one stays archived, and a new one leaves the inbox unless it needs me, in which case it's still on Action needed.
+    - **The count:** the list, the top of the page and the home page always give the same number, down to "Nothing is waiting for a label."
+    - **Clicks:** 8 at the same moment gave one reject. A Reject and a Move at the same moment gave exactly one winner, and a click from an old page after either changes nothing.
+    - **Failures:** Gmail's 2 requests each failed in 7 different ways, with nothing recorded, and the same click worked afterwards. An email deleted from Gmail can be rejected, also when it's deleted between asking and changing. 6 kinds of forged click were refused.
+    - **`undo.py`:** Unsorted comes off, emails return to the inbox exactly when they should, and the reject is forgotten with the email.
+  - **Part 3, in a real browser, with made-up emails and a stand-in for Gmail:** the button greys out, the row says what happened in each case, and the count follows without a reload. A failure showed up in the row, and the same click then worked. Move still works beside it, and it all fits at phone width with no console errors. Tests for parts 1 and 2 still pass, except the 2 checks in part 1's that the page has no forms.
+  - **Part 4, 82 free tests, with a fake connection to Claude and a stand-in for Gmail's API:**
+    - **Nothing changed for Claude:** with my real labels, the example labels and labels with awkward characters, the instructions, the answer's shape and the whole request came out byte-for-byte the same as from the committed code.
+    - **A new label, added while the server runs:** the next press of Sort tells Claude about it and allows it as an answer, makes the label in Gmail once and sorts under it. Before that, an answer outside the list is refused and the email stays new. The Unsorted page's dropdown and Move know it straight away.
+    - **A label added during a sort:** all 3 emails in that run got exactly the same instructions and allowed answers, and the next sort has the new label. A label removed by hand is gone from the next sort.
+    - **`triage.py` and `backlog.py`:** a dry run and `--apply`, then `sample`, `submit` and `apply`, all work with the labels as they are when they start, and a batch request matches the old code's.
+    - Nothing looks different, so there was no browser check this time. Tests for parts 1 to 3 still pass, apart from the same 2 checks in part 1's.
+  - **Part 5, 155 free tests, on a copy of my real log and a copy of `labels.json`, with a stand-in for Gmail's API:**
+    - **The save:** the label is added at the end, and everything else in the file stays byte-for-byte the same. When saving fails or crashes partway, the real file is untouched, and the same click finishes the job with no second label.
+    - **The checks:** 10 kinds of bad name or description are refused before reaching Gmail, the file or the log, and exactly 40 and 700 characters are accepted. A suggestion with invisible characters and a line break trying to pose as a new instruction is shown and saved as one clean line, and nothing invisible reaches Claude's instructions.
+    - **Gmail's answers:** `INBOX` is refused in any capitals, and so is a name Gmail turns down, with nothing saved. A label of mine in other capitals is reused under Gmail's spelling.
+    - **Failures:** Gmail failing before the label exists saves nothing. Gmail failing after it keeps the label, and the same click moves the email with no second label. An ended login reloads the page.
+    - **Clicks:** 8 Approves at once gave one label and one log row. 2 emails with the same new label gave one label and two moves, and 5 different new labels at once all survived. 40 saves while 4 threads kept reading gave no errors.
+    - **The rest:** text trying to be code stays plain text, including inside the form's boxes. 6 kinds of forged click were refused for each button. An older log gets the new column, and with no `labels.json` yet, the first save starts from the example labels and leaves that file alone. The real `undo.py` takes the new label off the email and puts it back where it was.
+  - **Part 5, in a real browser, with made-up emails and a stand-in for Gmail:** Approve reloaded the page with the green message and a dropdown that has the label. A row with the same suggestion in other capitals turned into "Move to [label]", with the label's own spelling. I opened the fold and typed a new name and description with a real keyboard, and they were saved. With no name, nothing gets sent. A name Gmail refused showed the problem in the row, with the fold still open and my typing still there. It all fits at phone width, with no console errors. Tests for parts 2 to 4 still pass, and part 1's apart from the same 2 checks.
+  - **The whole piece:** 552 free tests across its five parts, no paid calls, and nothing changed in my real Gmail, log or `labels.json`.
+- **Found:**
+  - **Gmail refused part of a request for 45 emails at once, at email 37.** `get_emails()` waited a minute and then finished fine. It's harmless, but the Sort button fetches the same way, so with more than about 37 new emails it may sit on "Looking for new emails…" for a minute.
+  - **Nothing on this page has run against real Gmail yet,** on purpose. I won't use the page until the History page is up, so the Gmail changes behind Move have only been tested with stand-ins, and the same goes for Open in Gmail on an archived email: the link says `#inbox`, and Google doesn't document these links. They're on the list below.
+  - **A bug from piece 3, found by testing Move:** a plain form that sent its secret code in a hidden field lost all its other fields. Checking the code read the request's form, which used up the body, so the page's own function found the form empty. Nothing had hit this yet: `/sign-in` doesn't read its form, and Move sends the code as a header. It now keeps a copy of the body first, a one-line fix in `web/csrf.py`.
+  - **A rare gap:** if the log can't be written after Gmail has already changed, the page says the move didn't finish, and the same click finishes it. But the log then notes that the email already had the label, so undoing its run would leave the label on. Reject has the same gap with the inbox. Sorting has the same order and the same gap, and a failed write to this small file is very unlikely.
+  - **For piece 5:** undoing a reject has to bring the email back onto the list. `_WAITING_FOR_LABEL` looks for a "rejected" row, so it will need to ignore rows that have been undone.
+  - **A broken `labels.json` now does less harm.** Before, the server wouldn't start at all. Now Sort and Move say what went wrong, and the other pages keep working, apart from the Unsorted page, which shows a plain error until the file is fixed. No restart is needed after fixing it.
+  - **Google's docs leave two things open.** They say Gmail's own names are reserved, that trying one gets error 400, and that their list of those names isn't complete. They don't say whether capitals count in a label's name. So the code doesn't depend on either: it treats names differing only in capitals as the same, and lets Gmail's answer decide the rest. Only a real label will show what Gmail actually does.
+  - **For piece 5:** undoing a whole run takes a new label off its emails, but the label stays in Gmail and `labels.json`. `label_created` is there so that undoing the click that made a label can also remove it.
+  - **A small gap:** if a label gets saved but moving the email fails, the other rows' dropdowns only get the label at the next page load.
+
+**Piece 5: the History page**
+- **Checked first, read-only:**
+  - **Undoing a run is quicker than I feared.** The log's 3 runs would take 15, 16 and 23 requests to Gmail, because emails that need the same change share a request, up to 1,000 per request. When the two backlog runs were applied, that many requests took about half a minute. At 50 "units" each, they're well within Google's allowance of 6,000 units a minute per user.
+  - **The slow, costly part comes afterwards.** Undone emails count as new again. For the run of 3,653, the Sort button would take about 2 hours and $1.70, over about 4 presses because of its $0.50 limit, and each press first fetches every email that's still new. `backlog.py` does the same for $0.86.
+  - **All 45 Unsorted emails are in the two backlog runs,** so most of my hand changes will sit in the runs I'd least want to undo.
+  - **A missed email is probably a recent one:** only 209 of the 6,526 archived emails are from the last 30 days.
+  - **Google's docs leave one thing open:** they don't say what a many-at-once change does if it names an email that no longer exists. They do say deleting a label is immediate and permanent.
+- **Decided:**
+  - **The page undoes runs of up to 1,000 emails.** That's about the biggest the Sort button can make, since its $0.50 limit buys about 1,050 first looks. A bigger run shows the `undo.py` command and why. A backlog undo is only half a job: it floods the inbox, and the cheap way back, `backlog.py`, is in the terminal anyway. This is easy to open up later, but a slip can't be taken back.
+  - **A fold on the run's card confirms first,** with the exact numbers and the button inside, worked out by the same code that does the undo. A browser pop-up is easy to click through and has no room for the numbers. The click waits, as with Move, and the button says "Undoing…", because 15 to 25 requests don't need a live progress box.
+  - **`undo_run()` in `undo.py` serves both the terminal and the page,** the way the Sort button uses `apply_sorted()` from `triage.py`. It forgets each group of emails straight after its Gmail request, so the log always matches Gmail. Repeating a label change is harmless ("idempotent"), so an undo that stops partway can be finished by pressing it again. Running `undo.py` myself shows the same numbers and asks for a yes. The page's buttons never need the terminal.
+  - **Undoing a run leaves alone what I've changed or archived myself.** This replaces piece 4's choice, because a warning would only offer two bad options: lose my work, or don't undo. A common reason to undo a run is that Claude sorted it badly, and then my fixes are the part worth keeping. It also closes a trap: an email I'd archived myself would lose its label and be forgotten, but never be sorted again, because it isn't in the inbox.
+  - **An undone change is crossed out, not erased,** with an `undone_at` date on its row in `label_changes`, so `_WAITING_FOR_LABEL` can ignore it and the email comes back onto the Unsorted page. Deleting the row would lose what Step 8 wants, and a separate reversal row, as a bank would add, would make every count work out which rows cancel which.
+  - **Undoing the click that made a label takes it out of `labels.json` if no other email in the log has it, and leaves it empty in Gmail.** Otherwise a mistaken approval would keep steering Claude on every future email. Deleting it in Gmail is ruled out: it can't be undone, and `label_created` only means the click added it to `labels.json`, so it could be an old Gmail label of mine, on emails the log doesn't know.
+  - **Rejected emails are listed with my other changes,** newest first, each with an Undo.
+  - **The counts show the label each email has now,** which is what Gmail shows and what undoing the run would reverse. Claude's first answer stays in `label_changes` for Step 8. The home page stays as it is, as piece 1f kept this split off it.
+  - **"Needs action" never overwrites Claude's answer.** An email needs two things to be on my to-do list: the log has to say it needs me, and it has to be in my inbox. So the button puts it back in the inbox if it isn't there, and adds a row to `label_changes`. "Claude said no, I said yes" is exactly the miss Step 8's accuracy tests look for, so it has to survive. The to-do is the email's subject, with no paid full read behind the click.
+  - **One list of all emails, newest first, 50 a page, with a search on sender and subject.** I'd remember who sent an email, not which run it was in. Each run's card and label counts link into it. It searches the log, so it's instant and free, and it can't see inside emails. Gmail's search could be added later if this isn't enough.
+  - **An email with the wrong label gets a Change label fold, not an undo.** Undoing one email would put it back in my inbox and forget it, and the next Sort might give the same answer, for a small cost. Changing the label fixes it and keeps Claude's answer next to mine. A Why fold shows Claude's reason, and the rows stay tidy because both folds stay closed. No checkboxes for now: my ticks would be lost when changing page, and I don't expect to fix many at once.
+  - **Smaller choices:** changing a label doesn't move an email in or out of the inbox, apart from Unsorted emails, which keep piece 4's rule. An email can now change more than once, so only its newest change has an Undo. The dropdown has my existing labels only. An undone change leaves the list but stays in the log. Undo and Sort can't overlap, so a label can't vanish in the middle of a run.
+- **Built, part 1: the runs:**
+  - `_RUN_NUMBERS` in `database.py` adds up each run in one query: how many emails it sorted, archived and left in the inbox as needing me, how many have the label Unsorted now, how many I've changed by hand, and the cost, with its full reads. `run_summaries()` returns every run, and `last_run_summary()` behind the home page is now the same query cut to its first row, so the two can't disagree.
+  - `run_label_counts()`: how many of each run's emails have each label now, biggest first.
+  - `history()` in `web/app.py` and `history.html` draw a card per run, newest first, with the labels in a fold. It all comes from the log, so the page doesn't ask Gmail. `show_logged_moment()` adds the time, which tells apart two runs on one day.
+  - **Smaller choices:** a card says "needed you" rather than "need you", because it's what happened at the time, and Action needed is the list for now. Unsorted and my hand changes only appear when there are some. A gray tag marks backlog runs.
+- **Built, part 2: finding an email:**
+  - `find_emails()` and `count_emails()` in `database.py`: one page of the emails a search and filters find, newest first, and how many there are altogether. `_matching()` writes their conditions, with `?` marks for every value. Each word of a search has to be in the sender or subject, in any order.
+  - `plain_text()`, which SQL can call as `plain()`: capitals and accents don't count, so "cafe" finds "Café". SQLite's own `LIKE` only ignores capitals on plain English letters, and about 1 in 5 of my subjects has other characters.
+  - `_NEEDS_ME`: the rule for whether an email needs me, now in one place. It replaces three copies, and this list would have been the fourth.
+  - `find_email()` in `web/app.py`, at `/history/emails`, with `history_emails.html` and `_email_row.html`. Each row gives the subject, sender, date, label and whether the email is in my inbox, which Gmail gets asked once per page load. A To-do tag follows the same rule as Action needed. `in_my_inbox()` moved out of `unsorted()`, so both pages share it.
+  - A Why fold on each row gives Claude's reason, the full read's if there is one, and when the email was sorted.
+  - On the History page: the search box (`_email_search.html`), "See all emails", a link from each card to its emails, and a link from each label count to exactly those emails.
+  - **Smaller choices:** the search goes in the address, so Back and reloading work. Searching inside a run or label keeps that filter, and "Show all emails" clears it. A search counts up to 100 characters. An old link asking for a page that no longer exists gets the last page.
+- **Built, part 3: my changes, and undoing one:**
+  - `undone_at` on `label_changes`, added to older logs by a migration. `my_changes()` in `database.py` lists the changes that stand, newest first. `_WAITING_FOR_LABEL` and the run numbers now ignore undone ones, which is what brings an undone reject back onto the Unsorted page.
+  - `undo_change()` in `web/labelling.py`, in the same order as every other change: first Gmail, then the log. `_put_back_in_gmail()` takes the new label off if the click added it, puts the old one back, and returns the email to the inbox if the click took it out. A rejected email kept its label, so only the inbox can change. `save_undone_change()` writes the old label back and crosses out the row with one commit.
+  - Repeating a label change is harmless ("idempotent"), so if Gmail or the log fails partway, the same click finishes the job.
+  - `_forget_new_label()` and `remove_label()` in `triage.py`: undoing the click that made a label takes it out of `labels.json` if no other email in the log has it, with the same safe save as adding one. The file comes back byte-for-byte as it was. The label stays in Gmail, empty, and the row says so, or says how many other emails keep it there.
+  - `no_sorting_meanwhile()` in `web/sorting.py`: Undo is refused while a sort is going, and a press of Sort during an undo waits for it, so a label can't vanish in the middle of a run.
+  - **On the page:** a "Your changes" section on History with a count, rejected emails included, and a link at the top that jumps to it. Each row gives the email, what I did and when, an Undo button and Open in Gmail. The row Unsorted leaves behind links here. The answer replaces only that row, as on the Unsorted page.
+  - **History now asks Gmail once per page load,** like the other pages. Undo needs Gmail, so the page has to say when I need to sign in. Without that, a click after the login ended would reload the page with no explanation.
+  - **Smaller choices:** Undo takes one click with no "are you sure?", because I can make the change again. "Your changes" sits below the runs, as sketched in the plan, and the link at the top is there because the runs will get more numerous. A problem shows in the row, like on the Unsorted page, so `_unsorted_problem.html` became `_row_problem.html`.
+- **Built, part 4: changing any email's label:**
+  - `change_label()` in `web/labelling.py` gives any email in the log another of my labels, through the same `_move()` as the Unsorted page's buttons. `_move()` now takes off the label the email has, instead of always Unsorted. The change is recorded like any other, so `label_changes` keeps Claude's answer next to mine, which gives Step 8 corrections on ordinary emails, not only the Unsorted ones.
+  - **The inbox stays out of it:** an email in my inbox is there because it needs me or I put it there, so fixing its label leaves it where it is. Only an email waiting for a label leaves, by piece 4's rule.
+  - **Only an email's newest change can be undone,** like taking plates off a stack ("last in, first out"). Undoing an older one would bring back a label from before the newer change. `newest` in `_MY_CHANGES` says which one that is, `undo_change()` refuses the others, and an older row under "Your changes" says why it has no button.
+  - On each row of the list, `_email_row.html` adds a Change label fold with a dropdown and a Move button. Once I've changed an email, its row shows what I did with an Undo, from `newest_changes()`, on later page loads too.
+  - `change_email_label()` and `undo_change_in_list()` in `web/app.py` answer by drawing the row again with `email_row()`, so I keep my place in the list. `attempt()` now holds what every button does when something goes wrong, instead of each one having its own copy.
+  - `my_labels()`: a broken `labels.json` no longer takes the list down. The rows just lose their dropdown until it's fixed.
+  - **Smaller choices:** the dropdown leaves out the label the email has. A move no longer makes a label again if I've deleted it in Gmail, which also goes for the Unsorted page's buttons. An open fold takes a whole line at every width now that a row has two.
+- **Built, part 5: the "Needs action" button:**
+  - `mark_needs_action()` in `web/labelling.py`: the to-do list only shows what's in my inbox, so the click puts the email back there if it isn't, after asking Gmail. `save_needs_action()` in `database.py` adds a row to `label_changes`, with `entered_inbox` saying whether the click put it back. Nothing in `decisions` or `full_reads` changes, so the log still says what the agent did and thought.
+  - **The rule, in three pieces:** `_AGENT_SAYS_NEEDS_ME` is Claude's answer, `_I_MARKED` is my mark, and `_FLAGGED` says what counts as a to-do while it's in my inbox: either my mark, or the agent having left it there. `flagged_emails()` uses it, so Action needed, the home page and Claude Desktop all get a marked email from one change. A run's numbers keep to Claude's answer, because they say what that run did. An email the agent archived for being old doesn't count until I mark it, even if it's back in my inbox.
+  - **On the to-do list,** in `todos.py`: an email I marked needs an action, unless it already needs a reply. The to-do is what Claude said to do if it said anything, and otherwise the subject. If the full read said no, its reason stays off the to-do, where it would only argue with me, and stays in the list's Why fold for checking. The row says "You added this on the History page", and doesn't repeat the subject when that's also the to-do.
+  - **Undoing it:** `_put_back_in_gmail()` takes the email out of the inbox again if the click put it there, and `save_undone_change()` only crosses out the mark, because the label may have changed since. Marks and label changes don't get in each other's way: `newest` in `_MY_CHANGES` compares a mark only with marks, so either can be undone first, and `newest_changes()` gives a row up to two Undos.
+  - **On the row:** a Needs action button at the start of its actions, with no button on an email that's already a to-do or marked.
+  - **Smaller choices:** an email has one mark at a time. If I archive a marked email and it turns out not to be done, I can move it back to the inbox in Gmail, or Undo and press the button again. Marking works during a sort, since sorting only touches new emails, while Undo still waits.
+- **Built, part 6: undoing a whole run:**
+  - **One real request first,** with my OK: Google's docs don't say what a many-at-once change does if it names an email that no longer exists. Asked to take a made-up email out of the inbox, Gmail accepted the request and did nothing. So one deleted email can't block an undo, and no fallback was needed.
+  - `plan_undo()` in `undo.py` works out what would happen without changing anything, and `apply_undo()` carries it out, the same shape as `sort_email()` and `apply_sorted()`. `what_undo_would_do()` turns a plan into sentences. The terminal and the page share all three, so what the fold promises is what happens. `undo.py`'s own `main()` only keeps its options and printing.
+  - `apply_undo()` sends up to 1,000 emails per request and forgets them straight after, with `forget_emails()` in `database.py`, so the log always matches Gmail. If a request fails, pressing again finishes the job, with the same result as if nothing had gone wrong.
+  - `plan_undo()` skips what I've handled myself: an email with a change that stands, by `run_emails()`, and one the agent left in the inbox that isn't there any more.
+  - `undo_whole_run()` in `web/labelling.py` holds up the other buttons while it works, so a Move can't change an email while its run is being undone. It's refused during a sort, and a press of Sort during an undo waits for it.
+  - **On the page:** a fold on each run's card, `_run_undo.html`, with the exact numbers and a red button inside. While the click waits, the button greys out and says "Undoing…". A run of more than 1,000 emails shows the command for `undo.py` and why, and the server refuses it too. A run with only my own emails left says there's nothing to undo. With Gmail out of reach there's no fold, because a run can't be undone then.
+  - **Running `undo.py` myself** now says the same numbers, asks me to type yes, and shows progress. If Gmail fails, it says so in words, and running it again finishes the job.
+  - **Smaller choices:** the fold also says how much sorting again costs, that emails older than 30 days get archived when sorted again, and that this can't itself be undone. `get_run()`, `last_run()` and `delete_run()` went, because nothing uses them now.
+- **Learned:**
+  - A test that can't fail proves nothing. I broke the page's SQL on purpose in two ways, and the tests failed 14 and 54 times ("mutation testing").
+  - A test's expected numbers should come from somewhere other than the code it's testing. Mine add up each run one row at a time in Python, rather than reuse the page's SQL.
+  - To compare two database files, compare their rows. My log and its backup had different fingerprints but the same 6,588 rows: only 5 bytes differed, in the bookkeeping at the top of the file.
+  - Breaking code on purpose also finds weak tests. Removing a rule from the To-do tag still passed all 476 tests of part 2, because I'd made up the right email but never checked it. Now that break fails too.
+  - "Newest first" isn't a complete order. 67 emails share their exact date with another, and without something to settle ties, an email could jump between pages. The message ID settles them, and removing it makes 3 tests fail.
+  - When moving code shouldn't change anything, the strongest check is to run both versions side by side: the committed app and the new one, on the same data, on two ports, compared page by page.
+  - Made-up test data can hide a bug by being too tidy. Every made-up email started with "the agent added this label", so a break that stopped undo restoring that note passed all the tests. The real risk was a later whole-run undo leaving the wrong label on, so I added an email where the note starts as no.
+  - A screenshot can catch a page mid-update. One showed an error in the wrong colour and size, while the browser's own numbers said it was right, and a second screenshot agreed with them.
+  - Allowing a second change to an email broke an assumption that part 3 relied on without saying so: one change per email. New features can do that to old code, so I wrote the rule down in the code (`newest`) and tested the order of undoing both ways.
+  - Reworking shared code needs proof for everyone who shares it. Since `_move()` is also behind the Unsorted page's buttons, I ran the committed version and the new one through the same 10 emails and compared every answer, request, log row and the `labels.json` file.
+  - Keeping a person's answer beside the model's, not over it, turns a correction into data. "Claude said no, I said yes" is a labelled miss (a "false negative"), which is what an accuracy test needs. Overwriting Claude's flag would have been simpler and thrown that away.
+  - A test that checks something is absent can pass for the wrong reason. Mine looked for "Claude's reason" in raw HTML, where the apostrophe is written `&#39;`, so it would never have found it even if it were there. Now it also checks the row itself is on the page, and reads plain text.
+  - Reloading a page puts the browser back where it had scrolled to. All the tests passed, but in a real browser the green message after undoing a run sat just above the window, under the top bar, so there was no feedback at all. Opening the page afresh starts it at the top. Tests see what's on a page, not what's in view.
+  - When docs leave a question open, one harmless real request can settle it, instead of building for both answers. Mine used a made-up ID, after first checking no real email had it.
+  - A breaking test is only as good as what it reaches. Three of my deliberate breaks seemed to survive because the web code had imported the functions by name, so it kept using the unbroken ones. Importing a name makes a copy of the reference, not a link to wherever it came from.
+  - A test run that's too slow doesn't get run. Adding thousands of made-up emails one commit at a time took minutes. Adding them in one commit brought the whole script down to 17 seconds, which made 23 deliberate breaks practical.
+- **Result:**
+  - **Part 1, 151 free tests, on copies of my real log:**
+    - **The numbers:** every number on each card matches what the rows say, worked out separately: 3 runs of 99, 2,836 and 3,653, newest first, costing $0.05, $0.66 and $0.86, and each run's label counts add up to its emails.
+    - **Hand changes:** a moved email counts under its new label, a rejected one stays under Unsorted, and an email with two changes counts once, with the totals unchanged.
+    - **Full reads:** the full read has the last word on what needed me, and its cost is added.
+    - **The home page:** it came out the same with the committed code and the new code, and its numbers stayed the same with full reads and hand changes.
+    - **The rest:** text trying to be code stays plain text, an ampersand arrives intact, a log with no runs says so, and "1 email" and "1 label" read right. The page writes nothing to the log, never asks Gmail, and takes about 11 milliseconds to load, or 73 with 300 hand changes.
+    - My real log, `labels.json` and `token.json` stayed byte-for-byte the same.
+  - **Part 1, in a real browser, with made-up runs:** the folds open and close, the labels fill two columns at desktop width and one at phone width, the page is no wider than a phone, nothing loads from outside, and the console shows no errors.
+  - **Part 2, 477 free tests, on copies of my real log, with a stand-in for Gmail's answers:**
+    - **Every email:** all 6,588 show up exactly once across 132 pages, newest first, with ties in the same order every time.
+    - **The search:** 21 searches on the real log match a separate version of the rule, written differently, and 24 on made-up emails find exactly the right ones, with accents, capitals, `%`, `_`, a backslash and an emoji. Text trying to be SQL or code does nothing.
+    - **Filters and pages:** each card's link and each label's link finds exactly the number beside it, and a label like "Orders & Payments" survives the address. The links to other pages keep the search and filters, and the edges work: 50, 100 and 101 emails, and page numbers that don't exist.
+    - **In my inbox, and to-dos:** the To-do tags match Action needed. An email I've archived myself isn't a to-do, and neither is one the agent archived although flagged. When the login has ended, Google can't be reached, or Google has a problem, the list stays, with the right notice.
+    - **What moved:** `flagged_emails()`, `unsorted_emails()` and the run numbers give the same rows as the committed code. The home page, Action needed and Unsorted came out the same from the committed app and the new one, apart from the secret code.
+    - **Breaking the code on purpose:** 10 different breaks in the order, the search, the filters and the To-do tag each make tests fail.
+    - **The rest:** looking and searching change nothing in the log, and a page takes about 18 milliseconds, or 55 with a search. My real log, `labels.json` and `token.json` stayed byte-for-byte the same.
+  - **Part 2, in a real browser, with made-up emails:** a search typed with a real keyboard found "Réunion à Paris" from "paris REUNION", and a search inside a run and a label kept both. Older and the label links work. The page is no wider than a phone, even with a very long word in a subject, nothing loads from outside, and the console shows no errors. Looking at it found one problem no test had: at phone width, an open Why fold was squeezed beside "Open in Gmail". An open fold now takes the whole line there.
+  - **Part 3, 219 free tests, on copies of my real log and `labels.json`, with a stand-in for Gmail's API:**
+    - **Undoing a move:** Gmail and the log go back exactly as they were, down to every column of the email's row. An old email stays archived, a new one returns to the inbox, one that needs me stays a to-do, and a label the email already had stays on.
+    - **Undoing a reject:** the email comes back onto the Unsorted page with Unsorted still on, and an old one needs no request to Gmail at all.
+    - **Undoing a new label:** `labels.json` comes back byte-for-byte, Claude's next run doesn't know the label, and it stays in Gmail, empty. Approving again reuses it. With other emails under the label, including from a later run, it stays, and the row says how many.
+    - **Failures:** Gmail's 2 requests each failed in 8 different ways, with nothing recorded, and the same click worked afterwards. If the log can't be written after Gmail has changed, the same click finishes the job. An ended login reloads the page, which now shows the sign-in button. An email deleted from Gmail gets undone in the log, and says so. A broken `labels.json` doesn't stop the undo, and the row says the label is still there.
+    - **Clicks:** 8 at the same moment gave one undo, and a click from an old page changes nothing. 6 kinds of forged click were refused. Undo waits for a sort, and a press of Sort during an undo waits for it, with no deadlock. An email can be moved, undone and moved again, and the log keeps both rows.
+    - **The rest:** text trying to be code stays plain text. An older log gets the new column and keeps its rows. 40 saves of `labels.json` while 4 threads kept reading gave no errors. The real `undo.py` reverses a run with undone changes in it, and forgets them with its emails.
+    - **Breaking the code on purpose:** 17 different breaks each make tests fail, after I added checks for the one that didn't at first (see Learned).
+    - My real log's rows and `labels.json` stayed the same. Tests for parts 1 and 2 still pass, after updating them for the new links and for History asking Gmail.
+  - **Part 3, in a real browser, with made-up emails and a stand-in for Gmail:** Undo with a real click replaced the row and updated the count with no reload. When the stand-in failed on purpose, the problem showed in the row, and the same click then worked. Undoing a new label took it out of the Unsorted page's dropdown, and the link from an Unsorted row lands on the list. It fits at phone width with no console errors. Measuring found a gap: at phone width the top bar is 135 pixels tall, more than the 80 I'd left for the jump link, so the heading could have hidden under it. It has 160 now.
+  - **Part 4, 363 free tests, on copies of my real log and `labels.json`, with a stand-in for Gmail's API:**
+    - **Changing a label:** in Gmail the old label comes off and the new one goes on, and the log keeps Claude's answer as the old label. A to-do stays in the inbox and on the list, an archived email stays archived, an email I put back in my inbox stays there, and one waiting for a label leaves by piece 4's rule. A label the email already had is noted, so undoing leaves it on.
+    - **Undoing:** the log's row comes back exactly as it was, even after two changes undone in turn. An older change is refused until the newer one is undone. An email rejected and then moved goes back under Unsorted, still rejected, and undoing the reject too puts it back on the Unsorted page.
+    - **Refused, with nothing changed:** the label it already has, a label that isn't mine, no label, Unsorted, and an email the log doesn't know.
+    - **Failures:** Gmail's 3 requests for a change each failed in 8 different ways, and so did the 2 for an undo, with nothing recorded, and the same click worked afterwards. A broken `labels.json` leaves the list working without its dropdowns.
+    - **Clicks:** 8 at the same moment gave one change, and a move and an undo at the same moment left Gmail and the log agreeing. 6 kinds of forged click were refused for each new button. Undo in the row waits for a sort.
+    - **The Unsorted page's buttons, side by side with the committed code:** the same answers, requests, Gmail labels, log rows and `labels.json` on 10 emails.
+    - **The rest:** text trying to be code stays plain text, including in the dropdown. The real `undo.py` takes the label I gave an email off and returns it to the inbox, also after two changes. A page of the list takes about 35 milliseconds.
+    - **Breaking the code on purpose:** 19 different breaks each make tests fail.
+    - My real log's rows and `labels.json` stayed the same. Tests for parts 1 to 3 still pass.
+  - **Part 4, in a real browser, with made-up emails and a stand-in for Gmail:** I opened the fold, chose a label and pressed Move twice with real clicks. The row updated with no reload and offered only the newest change's Undo, and "Your changes" explained why the older one had no button. When the stand-in failed on purpose, the problem showed in the row, and the same click then worked. Both folds open stack neatly at desktop and phone width, the page is no wider than a phone, and the console shows no errors.
+  - **Part 5, 239 free tests, on copies of my real log and `labels.json`, with a stand-in for Gmail's API:**
+    - **Marking:** an archived email goes back in the inbox with its label, onto Action needed, the home page's count and Claude Desktop's list. Its row in `decisions` and its full read stay exactly as they were, and the run's numbers don't move. An email already in my inbox needs no change in Gmail.
+    - **The to-do:** the subject, or what Claude said to do if it said anything. A reply stays a reply, and a full read's "no" stays off the list while its "yes" keeps its words and reason. An old flagged email back in my inbox stays off the list until I mark it.
+    - **Undoing:** the email leaves the list and the inbox again, or only the list if it was already in the inbox. It also works after I've archived the email, and for an email deleted from Gmail. It can then be marked again.
+    - **With label changes:** a mark and a label change can be undone in either order, and undoing a mark never touches the label. Label changes still go newest first, whatever marks are between them. A marked Unsorted email stays in the inbox when moved or rejected, and stays waiting for a label until then.
+    - **Refused, with nothing changed:** an email already on the list, one already marked, one the log doesn't know, and one deleted from Gmail.
+    - **Failures:** Gmail's 2 requests for marking each failed in 8 different ways, and so did the 1 for undoing, with nothing recorded, and the same click worked afterwards.
+    - **The rest:** 8 clicks at the same moment gave one mark and one change in Gmail. 6 kinds of forged click were refused. Text trying to be code stays plain text on all three pages. A marked email in a conversation already on the list adds to its row. The real `undo.py` reverses a run with marks in it. An older log gets the new column.
+    - **Nothing else moved:** with no marks, the to-do list, the run numbers and the list's rows are the same as the committed code's, and the home page, Action needed and Unsorted come out the same from both apps, apart from spaces and the secret code.
+    - **Breaking the code on purpose:** 21 different breaks each make tests fail.
+    - My real log's rows and `labels.json` stayed the same. Tests for parts 1 to 4 still pass.
+  - **Part 5, in a real browser, with made-up emails and a stand-in for Gmail:** a real click on Needs action added the To-do tag and an Undo without a reload, and the email showed up on Action needed with its tag and note. Undo took it off again, and the button came back. It fits at phone width, with no console errors.
+  - **Part 6, 767 free tests, on copies of my real log and `labels.json`, with a stand-in for Gmail's API:**
+    - **Side by side with the committed `undo.py`, on all 3 real runs:** the same requests in the same order (15, 16 and 23), the same labels in Gmail at the end, and the same log.
+    - **Undoing the real run of 99:** 87 emails go back to the inbox and 99 labels come off, in 15 requests. The run, its full reads and its crossed-out changes leave the log, its to-dos leave the list, and the home page counts its emails as new. The other runs stay as they were.
+    - **What I've handled myself stays:** an email I moved, moved twice, rejected, marked or archived myself keeps its label and stays where it is, and so do my changes. An email whose change I undid gets undone like any other. Once only my emails are left, the fold goes, and undoing my own change brings an email back into it.
+    - **Failures:** a request failing at the 5th of 15 in 8 different ways leaves the log matching Gmail, and pressing again ends exactly as if nothing had failed. So does a log that can't be written. A deleted email or a deleted label doesn't block it.
+    - **Too big:** a run of exactly 1,000 can be undone here and one of 1,001 can't, also when asked directly. The real backlog runs show the command.
+    - **The terminal:** anything but yes changes nothing, also with nobody there to answer. It shows progress, and a group of 2,500 goes in requests of 1,000, 1,000 and 500. A failure says what to do, with no error dump.
+    - **The rest:** 8 clicks at the same moment gave one undo. 6 kinds of forged click were refused. Sort and Move both wait for an undo, with no deadlock. A run's name trying to be code stays plain text.
+    - **Breaking the code on purpose:** 23 different breaks each make tests fail, after I fixed my setup and added the check for one that didn't at first (see Learned).
+    - My real log's rows and `labels.json` stayed the same. Tests for parts 1 to 5 still pass, after updating them for `undo.py`'s question and new rule.
+  - **Part 6, in a real browser, with made-up emails and a stand-in for Gmail:** the fold showed the numbers, and a failure on purpose appeared on the card with the fold still open. Slowed down, the button greyed out and said "Undoing…". Then the page opened at the top with the green message in sight, even from further down, the card gone and no console errors.
+  - **The whole piece:** more than 2,200 free tests across its six parts, no paid calls, and one harmless real request, which changed nothing in my real Gmail, log or `labels.json`.
+- **Found:**
+  - **The refusal at email 37 isn't explained by the per-minute allowance.** Fetching one email costs 20 units, so 45 emails is only 900 of 6,000. Google also describes a limit on requests at the same moment, which batches can trigger. That may be the cause, and then waiting a full minute would be longer than needed. It's on the list below.
+  - **The log and `labels.json` haven't changed since their backups in `backups/`.** The real checks get a fresh backup anyway, because the log will have changed by then.
+  - **What the search can't find:** it only sees what the log keeps, the subject and the sender's name, so an email address or a word inside an email won't match. A straight apostrophe doesn't find a curly one either, so "don't" misses "don’t". Gmail's own search is there for those.
+  - **After an Undo, the run's card above is out of date until the page is next loaded,** because the answer only replaces the row. The numbers on the card are right after a reload.
+  - **A label can outlive the emails that used it.** Only undoing the click that made a label removes it, so if I undo that click while another email has the label, then undo the other email, the label stays in `labels.json`. The same goes if Approve fails after saving the label, because the click that finishes the job no longer counts as the one that made it. It's harmless, and I can take it out of the file by hand.
+  - **Undoing an edited label loses my wording.** The Unsorted row shows Claude's suggestion again, because the log doesn't keep what I typed.
+  - **After Change label, a filtered list can be out of date until the next page load.** In a list filtered to one label, the row stays where it is, showing its new label, so I can still undo it there.
+  - **No new labels from the list.** The dropdown only has labels I already have. Making one stays on the Unsorted page, so an email that needs a label I don't have yet has to wait until I've made it there or added it to `labels.json`.
+  - **A marked email has no deadline or steps,** because there's no paid full read behind the button. It sits with the normal to-dos, under the urgent ones. A full read at the click could add those, for about $0.003, if I ever miss them.
+  - **A finished mark stays under "Your changes".** The log can't tell that I've finished a to-do, only that it left my inbox, so the row keeps its Undo. It's harmless, and it does mean that list only ever grows.
+  - **The same rare gap as before:** if the log can't be written after Gmail has already changed, the page says it didn't finish, and the same click finishes it. But the mark then notes that the email was already in my inbox, so undoing it would leave it there.
+  - **The same hidden message on the Unsorted page, now fixed.** Since piece 4, when Approve made a new label, the page reloaded and kept my place, which could leave its green message out of sight: I measured it 499 pixels above the window, with the row simply gone. It was a trade-off, and I chose to see the message. The page now opens afresh at the top, like after undoing a run, which loses my place in the list. That costs little, because handled emails leave the list anyway. A click that doesn't make a new label still only changes its own row, so I keep my place then.
+  - **Undoing a run lowers the cost card,** although the money was spent, because the card only knows what's in the log.
+
+### Getting ready for a Mac
+
+I planned a move from my Windows PC to my MacBook, then decided to keep the project on the PC for now. The log is a file on one computer and most of what the app needs isn't in Git, so the whole project has to move in one go, with both computers on the same Wi-Fi, and it wasn't worth rushing. What I built is the part that's useful anyway: the repo now works on both systems, so the move stays an option.
+
+**Decisions**
+- **The app works out which command to show.** Two error messages and the History page named `.venv\Scripts\python`. Neutral wording like `python undo.py` would have been simpler, but plain `python` can be another Python altogether: on my PC it's conda's.
+- **`constraints.txt` holds the exact version of all 57 packages.** `requirements.txt` only names the 11 I chose, so what those bring with them could come out newer on another computer than what I've tested. A constraints file only limits versions and never adds a package, so the Windows-only `pywin32` in it does nothing on a Mac.
+- **A `.gitattributes` file sets the line endings,** so the rule travels with the repo instead of depending on each computer's Git settings.
+- **Python 3.13.17 on a Mac.** It's the last 3.13 with a Mac installer, and differs from my PC's 3.13.11 only in fixes. A newer Python is a decision of its own, not one to mix into a move.
+- **What stays Windows-specific:** the Progress log, because it's history and still true, and the lock around `labels.json`, because Windows still needs it.
+
+**If I do move**
+- **The private files would go straight from one computer to the other, over SSH,** a sealed pipe between the two. Both computers already have what it needs, and no company would hold my API key, Gmail login or emails along the way, as OneDrive, iCloud or email would.
+- **On the Mac, the project would live in `~/Projects/`,** not on the Desktop or in Documents, which a Mac can keep in iCloud.
+- **Nothing may start on the Mac before the files arrive.** Without the log, the app silently creates an empty one. Without `token.json`, it accepts any Google account.
+
+- **Built:**
+  - `OWN_PYTHON` in `gmail_client.py`: the project's own Python on this computer, used by the two error messages and the History page.
+  - `constraints.txt`, `.gitattributes`, and `.DS_Store` and `._*` in `.gitignore`.
+  - Setup gives Windows and Mac commands where they differ. Tailwind's command is now the same on both, because PowerShell finds `tailwindcss.exe` from `tools/tailwindcss`.
+- **Learned:**
+  - **Line endings differ between systems.** Windows ends a line with two characters and Macs with one. Git for Windows' default setting (`core.autocrlf`) writes Windows endings when it checks out a file, and hides the difference from `git status`. So the same commit can give different files on two computers, unless the repo sets a rule.
+  - **Requirements and constraints do different jobs.** Requirements say what to install, and constraints say which versions are allowed if it gets installed. That's why one list of exact versions can serve two systems that need different packages.
+  - **To test for another system without having it,** I can judge each package's "only on this system" conditions as that system would, and ask PyPI whether a ready-made file exists for it.
+- **Result:**
+  - **19 of 19 checks on the app, on a copy of my log, with a stand-in for Gmail.** The two messages and the History page give the Windows command here and the Mac command when given the Mac's value, and the committed template fails that check, so the check can fail. All five pages load. Apart from the slashes, the History page is the same as the committed template's. My real log and `labels.json` stayed the same.
+  - **Line endings, in throwaway copies:** on a Windows-like setup without the new file, all 47 text files get Windows endings. With it, every text file has Mac-style endings on both setups, the two copies are identical byte for byte, and `git status` shows nothing.
+  - **Packages:** a Mac needs 56 of the 57, all but `pywin32`, and PyPI has a ready-made version of each for an Apple chip. On my PC, the new install command would change nothing.
+  - **The CSS:** a fresh build matches the file in use exactly.
+  - None of the Mac commands have run on a real Mac.
+- **Found:**
+  - **An Intel Mac would be harder.** `cryptography` 50.0.2 has no ready-made version for it, so it would have to be built from its source code. Setup says so.
+  - **Two Setup notes had drifted.** The Microsoft Store note, written for the Claude Desktop step, had ended up in the Drafter step, and the line about the log being a database had left the SQLite Viewer step. Both are back in place.
+
+## What's left
+
+- [x] **Step 1:** First call to Claude
+- [x] **Step 2:** Connect to Gmail
+- [x] **Step 3:** Triage (dry run)
+- [x] **Triage upgrade:** `needs_action` with what to do, and "Unsorted" with a suggested label name and description
+- [x] **Step 4a:** Label Designer reads my existing labels and inbox and suggests a label set
+- [x] **Step 4b:** review the suggestion, save the final labels in `labels.json` (kept out of Git, with a `labels.example.json` in the repo), and make triage read its labels from that file
+- [x] **Step 4c:** apply labels in Gmail and log every decision in SQLite, with undo
+- [x] **Step 4d:** archive sorted emails, except those that still need me
+- [x] Delete the empty `[Imap]/Drafts` and `Junk Email` labels in Gmail's settings (by hand)
+- [x] First bigger batch: 50 emails
+- [x] Check the labels against a random 5-year sample (Label Designer), page through the whole inbox, fetch emails in bulk
+- [x] Review the 4 new labels and edited descriptions, and save them to `labels.json`
+- [x] Dry run on 40 random older emails with the new labels
+- [x] Sort the backlog with the Message Batches API: 6,489 emails in two batches, inbox down from 6,494 to 60
+- [x] Re-sort the first 58 emails, which were sorted before the 4 new labels existed
+- [x] Give triage today's date and each email's date, so it doesn't flag past appointments and deadlines as to-dos
+- [x] **Step 5:** my own Gmail MCP server, with tools to search and read emails, list to-dos and save drafts, but none to send, delete or archive
+- [x] Try the MCP server in Claude Desktop, including saving one draft
+- [x] **Step 6:** the Drafter agent and the Critic (dry run on a real conversation, and a Critic test with a planted bad draft)
+- [x] Step 6b: collect my sent emails, and have Claude Opus write my writing-style file
+- [x] Step 6b: fill in `profile/about_me.md`
+- [x] Step 6b: resolve the sign-off conflict between `profile/about_me.md` and `profile/writing_style.md` (I removed the sign-off line from the about-me file, so the style file's sign-off section applies)
+- [x] Step 6b: give the Drafter and the Critic both profile files, limit lookups to the same person, Reply by default and Reply all only when asked
+- [ ] Use the Drafter on a real email that needs a reply, with `--save`, and check the draft in Gmail
+- [x] **Step 7 plan:** technology, pages, the two-stage action read, the model cascade, urgency and build order (see Step 7 above)
+- [x] **Step 7, piece 1a:** the first page: a FastAPI app with one template, only reachable from my computer
+- [x] **Step 7, piece 1b:** Tailwind's standalone program, styling the page
+- [x] **Step 7, piece 1c:** the layout: menu bar and "Sort new emails" button
+- [x] **Step 7, piece 1d:** my to-dos from the database
+- [x] **Step 7, piece 1e:** only the to-dos still in my inbox, in five parts:
+  - [x] part 1: a new Gmail connection for every page load, and a notice when Gmail can't be checked
+  - [x] part 2: a "Sign in to Gmail" button on the page, which only accepts my own account
+  - [x] part 3: the inbox check, in a shared `todos.py`
+  - [x] part 4: an "Open in Gmail" link that names my account
+  - [x] part 5: Claude Desktop's `list_todos` uses the same list and connects fresh for every tool call
+- [x] **Step 7, piece 1f:** a home page: what needs me, Unsorted emails, replies waiting to be sent, and what the agent did lately
+- [x] **Step 7, piece 2:** the full-read step (Haiku, with Sonnet for unsure cases) and urgency, in four parts:
+  - [x] part 1: the full read itself, with a dry run on real emails
+  - [x] part 2: saving the results in the log, in a table of their own
+  - [x] part 3: urgency, shown on the page, to Claude Desktop and on the home page
+  - [x] part 4: triage runs the full read for new emails, before deciding what to archive
+- [x] **Step 7, piece 3:** the "Sort new emails" button, with a summary of what arrived and what needs me, and protection against other websites pressing the app's buttons
+- [x] **Step 7, piece 4:** the Unsorted page: approve, edit or reject label suggestions, or pick a label by hand, in five parts:
+  - [x] part 1: the list of emails waiting for a label, read-only
+  - [x] part 2: move an email to a label I already have, recorded in the log
+  - [x] part 3: reject a suggestion
+  - [x] part 4: read the labels at the start of each run, so a new label works without a restart
+  - [x] part 5: approve or edit a suggestion, which adds the new label to Gmail and `labels.json`
+- [x] **Step 7, piece 5:** the History page, in six parts:
+  - [x] part 1: past runs, with how many emails have each label
+  - [x] part 2: find an email: a list of all emails with a search, and Claude's reason for each
+  - [x] part 3: my changes, including rejected emails, and undoing one of them
+  - [x] part 4: change the label of any email
+  - [x] part 5: the "Needs action" button, and undoing it
+  - [x] part 6: undoing a whole run from the page, sharing `undo.py`'s logic
+- [x] Get the repo ready for a Mac: the app, Setup and packages work on both systems
+- [ ] Move to my MacBook, if I still want to when I'm back. It needs a small tool for carrying the private files, and Setup's Mac commands still have to run on a real Mac
+- [ ] Once the History page is up, the real checks, in this order, with a fresh backup first:
+  - [ ] click Open in Gmail on an archived email, which changes nothing
+  - [ ] move one real email and change one real label, and undo each
+  - [ ] reject one email and undo it
+  - [ ] add one real label, which shows how Gmail treats capitals, and undo it
+  - [ ] "Needs action" on one archived email, and undo it
+  - [ ] sort 3 emails with `triage.py 3 --apply`, and undo that run on the page, to prove the safety net works
+  - [ ] another fresh backup, then press Sort for the first time
+- [ ] Find out why Gmail refused part of a request for 45 emails at once, at email 37, and whether the code needs to wait a full minute
+- [ ] **Step 7, piece 6:** the draft flow: "Draft reply" with a hints box, the Critic's verdict, and saving to Gmail drafts, also when the Critic isn't satisfied
+- [ ] An archive button for to-dos on the page, so I can clear the overdue ones there instead of in Gmail. A row can hold several conversations, so one click should archive them all. It's protected like every other button, by the protection against other websites that piece 3 added
+- [ ] A double-click shortcut that starts the web page, so opening it doesn't need VS Code
+- [ ] Decide whether to move the Google app from "Testing" to "In production", which would end the weekly sign-in (first check Google's rules for unverified apps that use Gmail)
+- [ ] Reorganize the project into folders, as its own step after Step 7, with one setting for where the data files live
+- [ ] Learn from my edits: compare each draft with what I actually sent, and have Claude suggest updates to the writing-style file for me to approve
+- [ ] Demo mode with made-up emails, safe to show in interviews and maybe online, together with using the project on both my PC and my laptop (a "To do" Gmail label, with Gmail as the source of truth)
+- [ ] **Step 8:** accuracy tests (evals), README polish and a demo video
+- [ ] **Cost:** try prompt caching for triage's system prompt, which is the same for every email
+
+**Open questions**
+- Build the demo mode at all? It's mostly for showing the finished product, so I'll decide once the web page works.
