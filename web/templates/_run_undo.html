@@ -1,0 +1,30 @@
+{# The way to undo a whole run, on its card. A fold is the confirmation: it says exactly what would
+   happen, in words worked out by the same code that does the undo, with the button inside, so one
+   stray click can't do anything. The click waits, as with Move, because 15 to 25 requests to Gmail
+   only take 10 to 20 seconds. HTMX adds the class htmx-request to the button while it waits, which
+   swaps its words. hx-swap="none": the answer reloads the page, or fills the problem's place below. #}
+{% set plan = plans.get(run.run_id) %}
+{% if run.emails > biggest_run %}
+  <div class="mt-2 text-sm text-gray-600">
+    <p>Too big to undo here, because it would flood your inbox, and the cheap way to sort it again, backlog.py, is in the terminal too. To undo it there:</p>
+    <p class="mt-1 font-mono text-xs break-all text-gray-800">.venv/Scripts/python undo.py --run {{ run.run_id }}</p>
+  </div>
+{% elif plan and plan.emails %}
+  <details class="mt-2 text-sm">
+    <summary class="cursor-pointer text-gray-600 hover:text-gray-900">Undo this run…</summary>
+    <ul class="mt-2 list-disc space-y-0.5 pl-5 text-gray-700">
+      {% for sentence in plan|what_undo_would_do %}
+        <li>{{ sentence }}</li>
+      {% endfor %}
+    </ul>
+    <button type="button" hx-post="{{ url_for('undo_whole_run', run_id=run.run_id).path }}" hx-swap="none" hx-disabled-elt="this"
+            class="group mt-3 rounded-md border border-red-300 bg-white px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50">
+      <span class="group-[.htmx-request]:hidden">Undo this run</span>
+      <span class="hidden group-[.htmx-request]:inline">Undoing…</span>
+    </button>
+  </details>
+{% elif plan %}
+  <p class="mt-2 text-sm text-gray-600">Nothing to undo here: you changed or archived what's left of this run yourself.</p>
+{% endif %}
+{# Where _row_problem.html goes if the click doesn't work. Empty, it takes up no room. #}
+<p id="problem-{{ run.run_id|run_row_id }}" class="empty:hidden"></p>

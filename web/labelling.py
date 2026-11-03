@@ -20,11 +20,18 @@ from gmail_client import (
     explain_failures,
     get_gmail_service,
     get_or_create_labels,
+    inbox_message_ids,
     list_labels,
 )
 from triage import ARCHIVE_SORTED_EMAILS, UNSORTED, add_label, load_labels, remove_label
+from undo import apply_undo, plan_undo
 
 log = logging.getLogger("uvicorn.error")
+
+# The biggest run the page can undo, about the biggest the Sort button can make: its $0.50 limit
+# buys about 1,050 first looks. A bigger run came from backlog.py, and undoing one floods the
+# inbox, with the cheap way back in the terminal anyway. So the page shows the command for undo.py.
+BIGGEST_RUN_ON_PAGE = 1000
 
 # How long a new label's name and description can be. My longest description is 643
 # characters, so this leaves room to write one by hand. Claude's suggestions are far shorter.
@@ -52,6 +59,10 @@ class NotNewestChangeError(RuntimeError):
 
 class AlreadyNeedsMeError(RuntimeError):
     """The email is already marked or on my to-do list, for example because the page is out of date. The message says which."""
+
+
+class RunTooBigError(RuntimeError):
+    """The run is bigger than the page undoes (see BIGGEST_RUN_ON_PAGE), for example because the page is out of date."""
 
 
 @dataclass
@@ -333,3 +344,22 @@ def undo_change(change_id):
         if change["label_created"]:
             _forget_new_label(conn, change["new_label"], undone)
     return undone
+
+
+def undo_whole_run(run_id):
+    """Undo a whole sorting run from the History page, with undo.py's own logic.
+
+    It holds up the other buttons for the 10 to 20 seconds this takes, so a Move can't change an
+    email while its run is being undone. Returns the plan it carried out and when the run
+    started, or None if nothing is left to undo, for example after a second click.
+    """
+    with _one_at_a_time, closing(database.connect()) as conn:
+        service = get_gmail_service(allow_browser_sign_in=False)
+        plan = plan_undo(conn, run_id, inbox_message_ids(service))
+        if plan.emails + plan.kept > BIGGEST_RUN_ON_PAGE:
+            raise RunTooBigError(run_id)
+        if not plan.emails:
+            return None
+        started = database.run_started(conn, run_id)
+        apply_undo(conn, service, plan)
+    return plan, started

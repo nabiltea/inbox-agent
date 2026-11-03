@@ -1028,6 +1028,15 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - **Undoing it:** `_put_back_in_gmail()` takes the email out of the inbox again if the click put it there, and `save_undone_change()` only crosses out the mark, because the label may have changed since. Marks and label changes don't get in each other's way: `newest` in `_MY_CHANGES` compares a mark only with marks, so either can be undone first, and `newest_changes()` gives a row up to two Undos.
   - **On the row:** a Needs action button at the start of its actions, with no button on an email that's already a to-do or marked.
   - **Smaller choices:** an email has one mark at a time. If I archive a marked email and it turns out not to be done, I can move it back to the inbox in Gmail, or Undo and press the button again. Marking works during a sort, since sorting only touches new emails, while Undo still waits.
+- **Built, part 6: undoing a whole run:**
+  - **One real request first,** with my OK: Google's docs don't say what a many-at-once change does if it names an email that no longer exists. Asked to take a made-up email out of the inbox, Gmail accepted the request and did nothing. So one deleted email can't block an undo, and no fallback was needed.
+  - `plan_undo()` in `undo.py` works out what would happen without changing anything, and `apply_undo()` carries it out, the same shape as `sort_email()` and `apply_sorted()`. `what_undo_would_do()` turns a plan into sentences. The terminal and the page share all three, so what the fold promises is what happens. `undo.py`'s own `main()` only keeps its options and printing.
+  - `apply_undo()` sends up to 1,000 emails per request and forgets them straight after, with `forget_emails()` in `database.py`, so the log always matches Gmail. If a request fails, pressing again finishes the job, with the same result as if nothing had gone wrong.
+  - `plan_undo()` skips what I've handled myself: an email with a change that stands, by `run_emails()`, and one the agent left in the inbox that isn't there any more.
+  - `undo_whole_run()` in `web/labelling.py` holds up the other buttons while it works, so a Move can't change an email while its run is being undone. It's refused during a sort, and a press of Sort during an undo waits for it.
+  - **On the page:** a fold on each run's card, `_run_undo.html`, with the exact numbers and a red button inside. While the click waits, the button greys out and says "Undoing…". A run of more than 1,000 emails shows the command for `undo.py` and why, and the server refuses it too. A run with only my own emails left says there's nothing to undo. With Gmail out of reach there's no fold, because a run can't be undone then.
+  - **Running `undo.py` myself** now says the same numbers, asks me to type yes, and shows progress. If Gmail fails, it says so in words, and running it again finishes the job.
+  - **Smaller choices:** the fold also says how much sorting again costs, that emails older than 30 days get archived when sorted again, and that this can't itself be undone. `get_run()`, `last_run()` and `delete_run()` went, because nothing uses them now.
 - **Learned:**
   - A test that can't fail proves nothing. I broke the page's SQL on purpose in two ways, and the tests failed 14 and 54 times ("mutation testing").
   - A test's expected numbers should come from somewhere other than the code it's testing. Mine add up each run one row at a time in Python, rather than reuse the page's SQL.
@@ -1041,6 +1050,10 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - Reworking shared code needs proof for everyone who shares it. Since `_move()` is also behind the Unsorted page's buttons, I ran the committed version and the new one through the same 10 emails and compared every answer, request, log row and the `labels.json` file.
   - Keeping a person's answer beside the model's, not over it, turns a correction into data. "Claude said no, I said yes" is a labelled miss (a "false negative"), which is what an accuracy test needs. Overwriting Claude's flag would have been simpler and thrown that away.
   - A test that checks something is absent can pass for the wrong reason. Mine looked for "Claude's reason" in raw HTML, where the apostrophe is written `&#39;`, so it would never have found it even if it were there. Now it also checks the row itself is on the page, and reads plain text.
+  - Reloading a page puts the browser back where it had scrolled to. All the tests passed, but in a real browser the green message after undoing a run sat just above the window, under the top bar, so there was no feedback at all. Opening the page afresh starts it at the top. Tests see what's on a page, not what's in view.
+  - When docs leave a question open, one harmless real request can settle it, instead of building for both answers. Mine used a made-up ID, after first checking no real email had it.
+  - A breaking test is only as good as what it reaches. Three of my deliberate breaks seemed to survive because the web code had imported the functions by name, so it kept using the unbroken ones. Importing a name makes a copy of the reference, not a link to wherever it came from.
+  - A test run that's too slow doesn't get run. Adding thousands of made-up emails one commit at a time took minutes. Adding them in one commit brought the whole script down to 17 seconds, which made 23 deliberate breaks practical.
 - **Result:**
   - **Part 1, 151 free tests, on copies of my real log:**
     - **The numbers:** every number on each card matches what the rows say, worked out separately: 3 runs of 99, 2,836 and 3,653, newest first, costing $0.05, $0.66 and $0.86, and each run's label counts add up to its emails.
@@ -1092,6 +1105,18 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
     - **Breaking the code on purpose:** 21 different breaks each make tests fail.
     - My real log's rows and `labels.json` stayed the same. Tests for parts 1 to 4 still pass.
   - **Part 5, in a real browser, with made-up emails and a stand-in for Gmail:** a real click on Needs action added the To-do tag and an Undo without a reload, and the email showed up on Action needed with its tag and note. Undo took it off again, and the button came back. It fits at phone width, with no console errors.
+  - **Part 6, 767 free tests, on copies of my real log and `labels.json`, with a stand-in for Gmail's API:**
+    - **Side by side with the committed `undo.py`, on all 3 real runs:** the same requests in the same order (15, 16 and 23), the same labels in Gmail at the end, and the same log.
+    - **Undoing the real run of 99:** 87 emails go back to the inbox and 99 labels come off, in 15 requests. The run, its full reads and its crossed-out changes leave the log, its to-dos leave the list, and the home page counts its emails as new. The other runs stay as they were.
+    - **What I've handled myself stays:** an email I moved, moved twice, rejected, marked or archived myself keeps its label and stays where it is, and so do my changes. An email whose change I undid gets undone like any other. Once only my emails are left, the fold goes, and undoing my own change brings an email back into it.
+    - **Failures:** a request failing at the 5th of 15 in 8 different ways leaves the log matching Gmail, and pressing again ends exactly as if nothing had failed. So does a log that can't be written. A deleted email or a deleted label doesn't block it.
+    - **Too big:** a run of exactly 1,000 can be undone here and one of 1,001 can't, also when asked directly. The real backlog runs show the command.
+    - **The terminal:** anything but yes changes nothing, also with nobody there to answer. It shows progress, and a group of 2,500 goes in requests of 1,000, 1,000 and 500. A failure says what to do, with no error dump.
+    - **The rest:** 8 clicks at the same moment gave one undo. 6 kinds of forged click were refused. Sort and Move both wait for an undo, with no deadlock. A run's name trying to be code stays plain text.
+    - **Breaking the code on purpose:** 23 different breaks each make tests fail, after I fixed my setup and added the check for one that didn't at first (see Learned).
+    - My real log's rows and `labels.json` stayed the same. Tests for parts 1 to 5 still pass, after updating them for `undo.py`'s question and new rule.
+  - **Part 6, in a real browser, with made-up emails and a stand-in for Gmail:** the fold showed the numbers, and a failure on purpose appeared on the card with the fold still open. Slowed down, the button greyed out and said "Undoing…". Then the page opened at the top with the green message in sight, even from further down, the card gone and no console errors.
+  - **The whole piece:** more than 2,200 free tests across its six parts, no paid calls, and one harmless real request, which changed nothing in my real Gmail, log or `labels.json`.
 - **Found:**
   - **The refusal at email 37 isn't explained by the per-minute allowance.** Fetching one email costs 20 units, so 45 emails is only 900 of 6,000. Google also describes a limit on requests at the same moment, which batches can trigger. That may be the cause, and then waiting a full minute would be longer than needed. It's on the list below.
   - **The log and `labels.json` haven't changed since their backups in `backups/`.** The real checks get a fresh backup anyway, because the log will have changed by then.
@@ -1104,6 +1129,8 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - **A marked email has no deadline or steps,** because there's no paid full read behind the button. It sits with the normal to-dos, under the urgent ones. A full read at the click could add those, for about $0.003, if I ever miss them.
   - **A finished mark stays under "Your changes".** The log can't tell that I've finished a to-do, only that it left my inbox, so the row keeps its Undo. It's harmless, and it does mean that list only ever grows.
   - **The same rare gap as before:** if the log can't be written after Gmail has already changed, the page says it didn't finish, and the same click finishes it. But the mark then notes that the email was already in my inbox, so undoing it would leave it there.
+  - **The same hidden message on the Unsorted page, now fixed.** Since piece 4, when Approve made a new label, the page reloaded and kept my place, which could leave its green message out of sight: I measured it 499 pixels above the window, with the row simply gone. It was a trade-off, and I chose to see the message. The page now opens afresh at the top, like after undoing a run, which loses my place in the list. That costs little, because handled emails leave the list anyway. A click that doesn't make a new label still only changes its own row, so I keep my place then.
+  - **Undoing a run lowers the cost card,** although the money was spent, because the card only knows what's in the log.
 
 ## What's left
 
@@ -1155,13 +1182,13 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - [x] part 3: reject a suggestion
   - [x] part 4: read the labels at the start of each run, so a new label works without a restart
   - [x] part 5: approve or edit a suggestion, which adds the new label to Gmail and `labels.json`
-- [ ] **Step 7, piece 5:** the History page, in six parts:
+- [x] **Step 7, piece 5:** the History page, in six parts:
   - [x] part 1: past runs, with how many emails have each label
   - [x] part 2: find an email: a list of all emails with a search, and Claude's reason for each
   - [x] part 3: my changes, including rejected emails, and undoing one of them
   - [x] part 4: change the label of any email
   - [x] part 5: the "Needs action" button, and undoing it
-  - [ ] part 6: undoing a whole run from the page, sharing `undo.py`'s logic
+  - [x] part 6: undoing a whole run from the page, sharing `undo.py`'s logic
 - [ ] Once the History page is up, the real checks, in this order, with a fresh backup first:
   - [ ] click Open in Gmail on an archived email, which changes nothing
   - [ ] move one real email and change one real label, and undo each
@@ -1197,7 +1224,7 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 | `labels.example.json` | A shareable example label set. My real labels are in `labels.json`, which isn't in Git |
 | `database.py` | The agent's memory: a SQLite log of every email it handled and what it decided |
 | `todos.py` | Step 7: what counts as a to-do, in one place. `list_todos()` combines the agent's flagged emails with Gmail's list of what's in my inbox, works out how pressing each one is, and puts the most pressing first. Used by the web page and the MCP server |
-| `undo.py` | Reverses the last run (`triage.py --apply` or `backlog.py apply`): removes the labels it added and moves archived emails back into the inbox |
+| `undo.py` | Reverses a sorting run, from the terminal or the History page: removes the labels it added and moves archived emails back into the inbox, leaving alone what I've changed or archived myself. It says what it would do first |
 | `backlog.py` | Sorts the whole inbox backlog with Claude's Message Batches API: `sample`, `submit`, `wait`, `apply` |
 | `gmail_mcp_server.py` | My Gmail MCP server: search, read threads, list to-dos, save reply drafts. No send, delete or archive |
 | `check_mcp_server.py` | Starts the MCP server the way an app would, lists its tools and tries the read-only ones |
@@ -1225,7 +1252,7 @@ Not in Git: `.env` (API key), `credentials.json` (Google app file), `token.json`
 6. Run `python show_inbox.py` to sign in to Gmail and list your 20 newest emails.
 7. Run `python triage.py` to see which label Claude would give each of your 20 newest emails, which ones need a reply or an action, and which fit no label. Add a number to sort more, for example `python triage.py 50`. Nothing in Gmail changes.
 8. Run `python label_designer.py` to have Claude Opus suggest a label set from 200 random inbox emails from the last 5 years, plus your current labels (about $0.40). If you already have a `labels.json`, it improves those labels instead of starting over. It saves the suggestion to `labels_proposed.json`. Nothing in Gmail changes. Review it, then save the labels you want to keep as `labels.json`, in the same format as `labels.example.json`. Until you do, triage uses the example labels.
-9. Run `python triage.py 10 --apply` to sort emails in Gmail for real, starting small. It adds the labels, and archives each sorted email unless it needs a reply or an action or is Unsorted. Gmail asks you to sign in again the first time, because changing labels needs more permission than reading. Emails that are already sorted get skipped. To reverse the last run, use `python undo.py`.
+9. Run `python triage.py 10 --apply` to sort emails in Gmail for real, starting small. It adds the labels, and archives each sorted email unless it needs a reply or an action or is Unsorted. Gmail asks you to sign in again the first time, because changing labels needs more permission than reading. Emails that are already sorted get skipped. To reverse the last run, use `python undo.py`, which says what it would do and asks first, or the History page.
 10. To sort a large backlog at half price, use `python backlog.py sample 40` to check the labels on a random sample first. Then run `python backlog.py submit`, `python backlog.py wait` (usually under an hour) and `python backlog.py apply`. Each `apply` is one run that `python undo.py` can reverse.
 11. To look inside the log (`inbox_agent.db`) in VS Code, install the **SQLite Viewer** extension.
 12. Run `python check_mcp_server.py` to check the Gmail MCP server. To use it in Claude Desktop, add an `mcpServers` section to Claude Desktop's `claude_desktop_config.json`, keeping everything already in the file. The server's `command` is the full path to `.venv\Scripts\python.exe`, and its `args` is the full path to `gmail_mcp_server.py`. Then quit and reopen Claude Desktop. **Settings → Developer → Edit Config** shows where the file is.

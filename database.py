@@ -300,15 +300,23 @@ def list_runs(conn):
     """).fetchall()
 
 
-def get_run(conn, run_id):
-    """Return all decisions from one run."""
-    return conn.execute("SELECT * FROM decisions WHERE run_id = ?", (run_id,)).fetchall()
+def run_emails(conn, run_id):
+    """The emails from one run, for working out what undoing it would do (see undo.py).
 
-
-def last_run(conn):
-    """Return all decisions from the most recent run, or an empty list if there are none."""
-    runs = list_runs(conn)
-    return get_run(conn, runs[0]["run_id"]) if runs else []
+    Each comes with whether the agent thinks it needs me, whether I've changed it by hand and
+    not undone that, and what it cost, with its full read.
+    """
+    return conn.execute(
+        f"""
+        SELECT decisions.message_id, decisions.label, decisions.label_added, decisions.archived,
+               {_AGENT_SAYS_NEEDS_ME} AS needs_me,
+               EXISTS (SELECT 1 FROM label_changes AS c WHERE c.message_id = decisions.message_id AND c.undone_at IS NULL) AS changed_by_hand,
+               COALESCE(decisions.cost, 0) + COALESCE(f.cost, 0) AS cost
+        FROM decisions LEFT JOIN full_reads AS f ON f.message_id = decisions.message_id
+        WHERE decisions.run_id = ?
+        """,
+        (run_id,),
+    ).fetchall()
 
 
 # For the web page's overview and History page. SQL does the adding up: COUNT and SUM total
@@ -531,7 +539,8 @@ def full_read_costs(conn, since):
     return {"reads_since": recent[0], "cost_since": recent[1], "reads": total[0], "cost": total[1]}
 
 
-def delete_run(conn, run_id):
-    """Forget every decision from one run, so those emails get sorted again next time."""
-    conn.execute("DELETE FROM decisions WHERE run_id = ?", (run_id,))
+def forget_emails(conn, message_ids):
+    """Forget some emails, so they get sorted again next time. Their full reads and crossed-out changes go with them."""
+    question_marks = ", ".join("?" * len(message_ids))  # one per email, so the IDs still go in as values, never as SQL
+    conn.execute(f"DELETE FROM decisions WHERE message_id IN ({question_marks})", message_ids)
     conn.commit()

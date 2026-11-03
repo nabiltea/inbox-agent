@@ -27,6 +27,7 @@ rebuilds the CSS every time a file is saved. (A public site would add --minify.)
 import hashlib
 import logging
 import mimetypes
+import re
 from contextlib import closing
 from datetime import date, datetime
 from math import ceil
@@ -56,6 +57,7 @@ from gmail_client import (
 )
 from todos import list_todos
 from triage import load_labels
+from undo import plan_undo, what_undo_would_do
 from web import labelling, sorting
 from web.csrf import csrf_context, protect_against_other_websites
 
@@ -169,12 +171,19 @@ def what_i_did(change):
     return f"{text}, and it left your inbox." if change["left_inbox"] else f"{text}."
 
 
+def run_row_id(run_id):
+    """A run's name in a form that works as the ID of a part of a page, which has to do without its colons."""
+    return "run-" + re.sub(r"[^A-Za-z0-9_-]", "-", run_id)
+
+
 # Lets the templates use these as "filters": {{ todo.received|show_date }}
 templates.env.filters["show_date"] = show_date
 templates.env.filters["show_logged_date"] = show_logged_date
 templates.env.filters["show_logged_moment"] = show_logged_moment
 templates.env.filters["show_deadline"] = show_deadline
 templates.env.filters["what_i_did"] = what_i_did
+templates.env.filters["what_undo_would_do"] = what_undo_would_do
+templates.env.filters["run_row_id"] = run_row_id
 templates.env.filters["clean"] = labelling.clean
 
 
@@ -350,11 +359,12 @@ def what_happened(changed):
     return f"{text}."
 
 
-def attempt(request, row_id, change, not_done="Not moved"):
-    """Carry out a button's change to one email, on any page.
+def attempt(request, row_id, change, not_done="Not moved", after_failure=""):
+    """Carry out a button's change, on any page.
 
     Returns what happened and no answer, or, if it went wrong, nothing and the answer that says so.
-    not_done is how a problem with the email itself starts, in words that fit the button.
+    not_done is how a problem with the email itself starts, in words that fit the button, and
+    after_failure is anything to add when Gmail or something else fails partway.
     """
     try:
         return change(), None
@@ -373,9 +383,11 @@ def attempt(request, row_id, change, not_done="Not moved"):
         problem = "Not undone: sorting is going. Try again when it's finished."
     except labelling.NotNewestChangeError:
         problem = "Not undone: a newer change to this email has to be undone first."
+    except labelling.RunTooBigError:
+        problem = "Not undone: this run is too big to undo here. Its card has the command for the terminal."
     except Exception as error:
         log.exception("Couldn't finish changing an email")
-        problem = f"Couldn't finish: {sorting.explain(error)}"
+        problem = f"Couldn't finish: {sorting.explain(error)} {after_failure}".strip()
     return None, row_problem(request, row_id, problem)
 
 
@@ -385,9 +397,11 @@ def change_row(request, message_id, change):
     if problem:
         return problem
     if changed and changed.label_created:
-        # Every row's dropdown needs the new label, so the page reloads, and says once what happened.
+        # Every row's dropdown needs the new label, so the page opens afresh, and says once what happened.
+        # HX-Redirect rather than HX-Refresh: a reload puts the browser back where it had scrolled to,
+        # which can leave the message at the top of the page out of sight.
         _waiting["message"] = {"ok": True, "text": f"{changed.subject}: {what_happened(changed)} You can undo this on the History page."}
-        return Response(headers={"HX-Refresh": "true"})
+        return Response(headers={"HX-Redirect": request.url_for("unsorted").path})
     with closing(database.connect()) as conn:
         total = database.unsorted_count(conn)
     return templates.TemplateResponse(
@@ -416,13 +430,20 @@ def history(request: Request):
     """History: what each sorting run did, newest first, and my own changes, each with a way to undo it.
 
     The numbers all come from the log. Gmail still gets asked, as on the other pages, because
-    Undo needs it, so the page has to say when it needs me to sign in.
+    Undo needs it, so the page has to say when it needs me to sign in. It also says what's in
+    my inbox, which decides what undoing a run would do.
     """
-    _, gmail_problem = check_inbox()
+    inbox_ids, gmail_problem = check_inbox()
     with closing(database.connect()) as conn:
         runs = database.run_summaries(conn)
         label_counts = database.run_label_counts(conn)
         changes = database.my_changes(conn)
+        # What undoing each run would do, for the fold on its card. Not when Gmail can't be asked,
+        # because a run can't be undone then, and not for a run too big to undo here.
+        plans = {} if inbox_ids is None else {
+            run["run_id"]: plan_undo(conn, run["run_id"], inbox_ids)
+            for run in runs if run["emails"] <= labelling.BIGGEST_RUN_ON_PAGE
+        }
     return templates.TemplateResponse(
         request=request,
         name="history.html",
@@ -430,14 +451,48 @@ def history(request: Request):
             "active": "history",
             "runs": runs,
             "label_counts": label_counts,
+            "plans": plans,
+            "biggest_run": labelling.BIGGEST_RUN_ON_PAGE,
             "changes": changes,
             "total": len(changes),  # for the count beside the heading, as in the answer to a click
             "max_search": MAX_SEARCH,
             # For the "Open in Gmail" links, the same as on Action needed
             "gmail_address": saved_account(),
             "gmail_problem": gmail_problem,  # None, or why Gmail couldn't be checked
+            "message": _waiting.pop("message", None),  # shown once, after undoing a run
         },
     )
+
+
+def what_undoing_a_run_did(plan, started):
+    """What undoing a whole run did, for the message at the top of the page."""
+    text = f"Undid the run of {show_logged_moment(started)}: {plan.back_in_inbox:,} back in your inbox, {plan.labels_removed:,} labels taken off."
+    if plan.kept:
+        text += f" {plan.kept:,} stayed as they are, because you changed or archived them yourself."
+    return f"{text} The undone emails in your inbox count as new now, so the next press of Sort sorts them again."
+
+
+@app.post("/history/runs/{run_id}/undo")
+def undo_whole_run(request: Request, run_id: str):
+    """Undo a whole sorting run, then open the page afresh, because nearly all its numbers have changed.
+
+    HX-Redirect rather than HX-Refresh: a reload puts the browser back where it had scrolled to,
+    which can leave the message at the top of the page out of sight.
+    """
+
+    def undo_it():
+        with sorting.no_sorting_meanwhile():
+            return labelling.undo_whole_run(run_id)
+
+    outcome, problem = attempt(
+        request, run_row_id(run_id), undo_it, not_done="Not undone",
+        after_failure="What's undone stays undone, so pressing the button again finishes the job.",
+    )
+    if problem:
+        return problem
+    text = what_undoing_a_run_did(*outcome) if outcome else "There's nothing left to undo in that run."
+    _waiting["message"] = {"ok": True, "text": text}
+    return Response(headers={"HX-Redirect": request.url_for("history").path})
 
 
 def what_undo_did(undone):
