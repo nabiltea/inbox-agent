@@ -1,0 +1,28 @@
+{# One email in the list on the History page: what it is, where it is now, and Claude's reason. A row is
+   a template of its own, so the buttons coming next can replace one row by itself. Everything here
+   is escaped, as on every page (see app.py). #}
+{% from "_macros.html" import open_in_gmail, tag %}
+<li class="px-5 py-3">
+  <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+    <p class="min-w-0 font-medium wrap-break-word">{{ email.subject }}</p>
+    {# The same rule as Action needed: the agent left it in my inbox because it needs me, and it's still there #}
+    {% if in_inbox and email.flagged %}{{ tag("To-do", "bg-amber-100 text-amber-800") }}{% endif %}
+  </div>
+  <p class="mt-0.5 text-sm wrap-break-word text-gray-500">
+    {{ email.sender }} · {{ email.received_at|show_logged_date }} · {{ email.label }} · {{ "In your inbox" if in_inbox else "Archived" }}
+  </p>
+  <div class="mt-1 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+    {# <details> is a fold the browser handles by itself, as on the other pages. On a phone, an open
+       fold takes the whole line (the last class), or its text gets squeezed beside the link. #}
+    <details class="min-w-0 flex-1 text-sm max-sm:open:basis-full">
+      <summary class="cursor-pointer text-gray-600 hover:text-gray-900">Why</summary>
+      {% if email.reason %}<p class="mt-1 text-gray-600">{{ email.reason }}</p>{% endif %}
+      {% if email.full_read_reason %}<p class="mt-1 text-gray-600">Full read: {{ email.full_read_reason }}</p>{% endif %}
+      <p class="mt-1 text-gray-500">Sorted on {{ email.processed_at|show_logged_moment }}.</p>
+    </details>
+    {# Without a known account there's no link, rather than one that opens the wrong account. #}
+    {% if gmail_address %}
+      <div class="ml-auto">{{ open_in_gmail(email.thread_id, gmail_address) }}</div>
+    {% endif %}
+  </div>
+</li>

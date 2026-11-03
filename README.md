@@ -996,10 +996,21 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - `run_label_counts()`: how many of each run's emails have each label now, biggest first.
   - `history()` in `web/app.py` and `history.html` draw a card per run, newest first, with the labels in a fold. It all comes from the log, so the page doesn't ask Gmail. `show_logged_moment()` adds the time, which tells apart two runs on one day.
   - **Smaller choices:** a card says "needed you" rather than "need you", because it's what happened at the time, and Action needed is the list for now. Unsorted and my hand changes only appear when there are some. A gray tag marks backlog runs.
+- **Built, part 2: finding an email:**
+  - `find_emails()` and `count_emails()` in `database.py`: one page of the emails a search and filters find, newest first, and how many there are altogether. `_matching()` writes their conditions, with `?` marks for every value. Each word of a search has to be in the sender or subject, in any order.
+  - `plain_text()`, which SQL can call as `plain()`: capitals and accents don't count, so "cafe" finds "Café". SQLite's own `LIKE` only ignores capitals on plain English letters, and about 1 in 5 of my subjects has other characters.
+  - `_NEEDS_ME`: the rule for whether an email needs me, now in one place. It replaces three copies, and this list would have been the fourth.
+  - `find_email()` in `web/app.py`, at `/history/emails`, with `history_emails.html` and `_email_row.html`. Each row gives the subject, sender, date, label and whether the email is in my inbox, which Gmail gets asked once per page load. A To-do tag follows the same rule as Action needed. `in_my_inbox()` moved out of `unsorted()`, so both pages share it.
+  - A Why fold on each row gives Claude's reason, the full read's if there is one, and when the email was sorted.
+  - On the History page: the search box (`_email_search.html`), "See all emails", a link from each card to its emails, and a link from each label count to exactly those emails.
+  - **Smaller choices:** the search goes in the address, so Back and reloading work. Searching inside a run or label keeps that filter, and "Show all emails" clears it. A search counts up to 100 characters. An old link asking for a page that no longer exists gets the last page.
 - **Learned:**
   - A test that can't fail proves nothing. I broke the page's SQL on purpose in two ways, and the tests failed 14 and 54 times ("mutation testing").
   - A test's expected numbers should come from somewhere other than the code it's testing. Mine add up each run one row at a time in Python, rather than reuse the page's SQL.
   - To compare two database files, compare their rows. My log and its backup had different fingerprints but the same 6,588 rows: only 5 bytes differed, in the bookkeeping at the top of the file.
+  - Breaking code on purpose also finds weak tests. Removing a rule from the To-do tag still passed all 476 tests of part 2, because I'd made up the right email but never checked it. Now that break fails too.
+  - "Newest first" isn't a complete order. 67 emails share their exact date with another, and without something to settle ties, an email could jump between pages. The message ID settles them, and removing it makes 3 tests fail.
+  - When moving code shouldn't change anything, the strongest check is to run both versions side by side: the committed app and the new one, on the same data, on two ports, compared page by page.
 - **Result:**
   - **Part 1, 151 free tests, on copies of my real log:**
     - **The numbers:** every number on each card matches what the rows say, worked out separately: 3 runs of 99, 2,836 and 3,653, newest first, costing $0.05, $0.66 and $0.86, and each run's label counts add up to its emails.
@@ -1009,9 +1020,19 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
     - **The rest:** text trying to be code stays plain text, an ampersand arrives intact, a log with no runs says so, and "1 email" and "1 label" read right. The page writes nothing to the log, never asks Gmail, and takes about 11 milliseconds to load, or 73 with 300 hand changes.
     - My real log, `labels.json` and `token.json` stayed byte-for-byte the same.
   - **Part 1, in a real browser, with made-up runs:** the folds open and close, the labels fill two columns at desktop width and one at phone width, the page is no wider than a phone, nothing loads from outside, and the console shows no errors.
+  - **Part 2, 477 free tests, on copies of my real log, with a stand-in for Gmail's answers:**
+    - **Every email:** all 6,588 show up exactly once across 132 pages, newest first, with ties in the same order every time.
+    - **The search:** 21 searches on the real log match a separate version of the rule, written differently, and 24 on made-up emails find exactly the right ones, with accents, capitals, `%`, `_`, a backslash and an emoji. Text trying to be SQL or code does nothing.
+    - **Filters and pages:** each card's link and each label's link finds exactly the number beside it, and a label like "Orders & Payments" survives the address. The links to other pages keep the search and filters, and the edges work: 50, 100 and 101 emails, and page numbers that don't exist.
+    - **In my inbox, and to-dos:** the To-do tags match Action needed. An email I've archived myself isn't a to-do, and neither is one the agent archived although flagged. When the login has ended, Google can't be reached, or Google has a problem, the list stays, with the right notice.
+    - **What moved:** `flagged_emails()`, `unsorted_emails()` and the run numbers give the same rows as the committed code. The home page, Action needed and Unsorted came out the same from the committed app and the new one, apart from the secret code.
+    - **Breaking the code on purpose:** 10 different breaks in the order, the search, the filters and the To-do tag each make tests fail.
+    - **The rest:** looking and searching change nothing in the log, and a page takes about 18 milliseconds, or 55 with a search. My real log, `labels.json` and `token.json` stayed byte-for-byte the same.
+  - **Part 2, in a real browser, with made-up emails:** a search typed with a real keyboard found "Réunion à Paris" from "paris REUNION", and a search inside a run and a label kept both. Older and the label links work. The page is no wider than a phone, even with a very long word in a subject, nothing loads from outside, and the console shows no errors. Looking at it found one problem no test had: at phone width, an open Why fold was squeezed beside "Open in Gmail". An open fold now takes the whole line there.
 - **Found:**
   - **The refusal at email 37 isn't explained by the per-minute allowance.** Fetching one email costs 20 units, so 45 emails is only 900 of 6,000. Google also describes a limit on requests at the same moment, which batches can trigger. That may be the cause, and then waiting a full minute would be longer than needed. It's on the list below.
   - **The log and `labels.json` haven't changed since their backups in `backups/`.** The real checks get a fresh backup anyway, because the log will have changed by then.
+  - **What the search can't find:** it only sees what the log keeps, the subject and the sender's name, so an email address or a word inside an email won't match. A straight apostrophe doesn't find a curly one either, so "don't" misses "don’t". Gmail's own search is there for those.
 
 ## What's left
 
@@ -1065,7 +1086,7 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - [x] part 5: approve or edit a suggestion, which adds the new label to Gmail and `labels.json`
 - [ ] **Step 7, piece 5:** the History page, in six parts:
   - [x] part 1: past runs, with how many emails have each label
-  - [ ] part 2: find an email: a list of all emails with a search, and Claude's reason for each
+  - [x] part 2: find an email: a list of all emails with a search, and Claude's reason for each
   - [ ] part 3: my changes, including rejected emails, and undoing one of them
   - [ ] part 4: change the label of any email
   - [ ] part 5: the "Needs action" button, and undoing it

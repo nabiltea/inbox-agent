@@ -5,7 +5,8 @@ function, and each page is an HTML template in web/templates/ that the function
 fills in. There are three pages, Action needed, Unsorted and History, which share
 one layout with the menu and the "Sort new emails" button (web/templates/base.html).
 Action needed lists my to-dos, and Unsorted the emails that fit no label, where I decide
-what happens to each one's suggested label. History shows what each sorting run did.
+what happens to each one's suggested label. History shows what each sorting run did,
+and finds any email the agent has sorted.
 
 Start it from the project folder with:
   python -m uvicorn web.app:app --reload
@@ -28,6 +29,7 @@ import logging
 import mimetypes
 from contextlib import closing
 from datetime import date, datetime
+from math import ceil
 from pathlib import Path
 from typing import Annotated
 
@@ -117,6 +119,10 @@ _waiting = {}
 # the top bar, the home page.
 HOME = "/"
 
+# The list of emails on the History page: how many on a page, and how much of a search counts.
+EMAILS_PER_PAGE = 50
+MAX_SEARCH = 100
+
 
 def show_date(date):
     """A date like "Fri 24 Oct", with the year added if it isn't this year.
@@ -183,6 +189,11 @@ def check_inbox():
         return None, "offline"
     except GoogleTemporaryError:
         return None, "google_problem"
+
+
+def in_my_inbox(email, inbox_ids):
+    """Whether an email from the log is in my inbox. Gmail knows right now, and when it can't be asked, the log says what the agent last did."""
+    return not email["archived"] if inbox_ids is None else email["message_id"] in inbox_ids
 
 
 # @app.get("/") connects the function below it to the address "/", the home page. GET
@@ -262,19 +273,14 @@ def unsorted(request: Request):
     inbox_ids, gmail_problem = check_inbox()
     with closing(database.connect()) as conn:
         emails = database.unsorted_emails(conn)
-
-    def in_my_inbox(email):
-        # Gmail knows what's in my inbox right now. When it can't be asked, the log says what the agent last did.
-        return not email["archived"] if inbox_ids is None else email["message_id"] in inbox_ids
-
     labels = sorted(load_labels(), key=str.lower)  # read fresh for every page load
     return templates.TemplateResponse(
         request=request,
         name="unsorted.html",
         context={
             "active": "unsorted",
-            "in_inbox": [email for email in emails if in_my_inbox(email)],
-            "older": [email for email in emails if not in_my_inbox(email)],
+            "in_inbox": [email for email in emails if in_my_inbox(email, inbox_ids)],
+            "older": [email for email in emails if not in_my_inbox(email, inbox_ids)],
             "labels": labels,  # for each row's dropdown
             "my_labels": {label.lower(): label for label in labels},  # to spot a suggestion I already have as a label
             "max_name": labelling.MAX_NAME,
@@ -382,7 +388,46 @@ def history(request: Request):
     return templates.TemplateResponse(
         request=request,
         name="history.html",
-        context={"active": "history", "runs": runs, "label_counts": label_counts},
+        context={"active": "history", "runs": runs, "label_counts": label_counts, "max_search": MAX_SEARCH},
+    )
+
+
+@app.get("/history/emails")
+def find_email(request: Request, q: str = "", run: str = "", label: str = "", page: int = 1):
+    """Every email the agent has sorted, newest first, with a search, filters and pages.
+
+    It only looks, so it's a GET, and the search goes in the address, which makes Back and reloading work.
+    """
+    inbox_ids, gmail_problem = check_inbox()
+    search = q.strip()[:MAX_SEARCH]
+    with closing(database.connect()) as conn:
+        total = database.count_emails(conn, search, run, label)
+        last_page = max(ceil(total / EMAILS_PER_PAGE), 1)
+        page = min(max(page, 1), last_page)  # an old link can ask for a page that no longer exists
+        first = (page - 1) * EMAILS_PER_PAGE
+        emails = database.find_emails(conn, search, run, label, limit=EMAILS_PER_PAGE, offset=first)
+        started = database.run_started(conn, run) if run else None
+    return templates.TemplateResponse(
+        request=request,
+        name="history_emails.html",
+        context={
+            "active": "history",
+            "emails": [(email, in_my_inbox(email, inbox_ids)) for email in emails],
+            "total": total,
+            "first": first,
+            "page": page,
+            "last_page": last_page,
+            "search": search,
+            "run": run,
+            "label": label,
+            "run_started": started,
+            # What the links to other pages of this list have to keep
+            "filters": {name: value for name, value in (("q", search), ("run", run), ("label", label)) if value},
+            "max_search": MAX_SEARCH,
+            # For the "Open in Gmail" links, the same as on Action needed
+            "gmail_address": saved_account(),
+            "gmail_problem": gmail_problem,  # None, or why Gmail couldn't be checked
+        },
     )
 
 

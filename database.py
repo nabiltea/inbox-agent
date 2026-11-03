@@ -7,10 +7,26 @@ it has already sorted, undo a run, and later feed the web page's daily summary.
 
 import json
 import sqlite3
+import unicodedata
 from datetime import datetime
 from pathlib import Path
 
 DB_FILE = Path(__file__).parent / "inbox_agent.db"
+
+# Whether an email needs me, written once for every query that asks. The full read has the last
+# word: COALESCE takes its answer, and without a full read (NULL) it takes triage's first look
+# instead. f is the email's row in full_reads, which those queries add with a LEFT JOIN.
+_NEEDS_ME = "COALESCE(f.needs_me = 'yes', decisions.needs_reply = 1 OR decisions.needs_action = 1)"
+
+
+def plain_text(text):
+    """Text as the email search compares it: capitals and accents don't count, so "cafe" finds "Café".
+
+    SQLite's own LIKE only ignores capitals on plain English letters, and about 1 in 5 of my
+    subjects has other characters. NFKD splits "é" into "e" and a separate accent, which gets dropped.
+    """
+    split = unicodedata.normalize("NFKD", text or "")
+    return "".join(character for character in split if not unicodedata.combining(character)).casefold()
 
 
 def connect():
@@ -109,6 +125,8 @@ def connect():
     # SQLite only enforces links between tables (like the one above) when this is
     # switched on, and only for this connection, so it's switched on every time.
     conn.execute("PRAGMA foreign_keys = ON")
+    # Lets this connection's SQL call plain_text(), for the email search.
+    conn.create_function("plain", 1, plain_text, deterministic=True)
     return conn
 
 
@@ -180,14 +198,57 @@ def flagged_emails(conn):
     LEFT JOIN adds each email's full read from full_reads, and leaves those columns
     empty (NULL) for an email that has none.
     """
-    return conn.execute("""
+    return conn.execute(f"""
         SELECT decisions.*, f.needs_me AS full_read, f.what_to_do, f.kind, f.steps, f.place, f.deadline,
                f.time_sensitive, f.reason AS full_read_reason
         FROM decisions LEFT JOIN full_reads AS f ON f.message_id = decisions.message_id
-        WHERE decisions.archived = 0
-          AND (f.needs_me = 'yes' OR (f.needs_me IS NULL AND (decisions.needs_reply = 1 OR decisions.needs_action = 1)))
+        WHERE decisions.archived = 0 AND {_NEEDS_ME}
         ORDER BY decisions.received_at DESC
     """).fetchall()
+
+
+def _matching(search, run_id, label):
+    """The conditions behind the email list, and the values for their ? marks. An empty one limits nothing.
+
+    Each word of the search has to be somewhere in the subject or sender, in any order. LIKE treats
+    % and _ as wildcards, so a backslash goes in front of any in the word, which ESCAPE makes mean "literally".
+    """
+    conditions, values = ["1"], []
+    for word in search.split():
+        conditions.append(r"plain(decisions.subject || ' ' || decisions.sender) LIKE ? ESCAPE '\'")
+        values.append("%" + plain_text(word).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%")
+    if run_id:
+        conditions.append("decisions.run_id = ?")
+        values.append(run_id)
+    if label:
+        conditions.append("decisions.label = ?")
+        values.append(label)
+    return " AND ".join(conditions), values
+
+
+def find_emails(conn, search="", run_id="", label="", limit=50, offset=0):
+    """One page of the emails a search and filters find, newest first, with whether each one is flagged and why.
+
+    flagged follows the same rule as flagged_emails(). The message ID settles the order of emails
+    with the same date, of which the log has dozens: without it, one could jump between pages.
+    """
+    where, values = _matching(search, run_id, label)
+    return conn.execute(
+        f"""
+        SELECT decisions.*, decisions.archived = 0 AND {_NEEDS_ME} AS flagged, f.reason AS full_read_reason
+        FROM decisions LEFT JOIN full_reads AS f ON f.message_id = decisions.message_id
+        WHERE {where}
+        ORDER BY decisions.received_at DESC, decisions.message_id
+        LIMIT ? OFFSET ?
+        """,
+        (*values, limit, offset),
+    ).fetchall()
+
+
+def count_emails(conn, search="", run_id="", label=""):
+    """How many emails a search and filters find altogether."""
+    where, values = _matching(search, run_id, label)
+    return conn.execute(f"SELECT COUNT(*) FROM decisions WHERE {where}", values).fetchone()[0]
 
 
 def newest_emails(conn, count, except_labels=()):
@@ -225,13 +286,12 @@ def last_run(conn):
 # left in the inbox as needing me, how many have the label Unsorted now, how many I've changed
 # by hand, and what it cost, with its full reads. backlog.py starts its runs' names with "backlog-".
 #
-# Needing me follows the same rule as flagged_emails(): it has to be still in the inbox, and
-# the full read has the last word. COALESCE takes its answer, and without a full read (NULL) it
-# takes triage's first look instead. EXISTS counts an email once, however many changes it has.
-_RUN_NUMBERS = """
+# Needing me follows the same rule as flagged_emails(): it has to be still in the inbox.
+# EXISTS counts an email once, however many changes it has.
+_RUN_NUMBERS = f"""
     SELECT decisions.run_id, decisions.run_id LIKE 'backlog-%' AS from_backlog,
            MIN(decisions.processed_at) AS started, COUNT(*) AS emails, SUM(decisions.archived) AS archived,
-           SUM(decisions.archived = 0 AND COALESCE(f.needs_me = 'yes', decisions.needs_reply = 1 OR decisions.needs_action = 1)) AS flagged,
+           SUM(decisions.archived = 0 AND {_NEEDS_ME}) AS flagged,
            SUM(decisions.label = 'Unsorted') AS unsorted,
            SUM(EXISTS (SELECT 1 FROM label_changes AS c WHERE c.message_id = decisions.message_id)) AS changed_by_hand,
            COALESCE(SUM(decisions.cost), 0) + COALESCE(SUM(f.cost), 0) AS cost
@@ -263,6 +323,11 @@ def run_label_counts(conn):
     return counts
 
 
+def run_started(conn, run_id):
+    """When a run started, or None if the log has no such run, for example because it has been undone."""
+    return conn.execute("SELECT MIN(processed_at) FROM decisions WHERE run_id = ?", (run_id,)).fetchone()[0]
+
+
 # Which emails wait for me to decide about their label: those that fit no label, which triage
 # labels "Unsorted" (UNSORTED in triage.py), unless I've said none is needed. Whether I have is
 # only kept in label_changes, not in a second place in decisions, so the two can't disagree.
@@ -278,10 +343,9 @@ def unsorted_count(conn):
     return conn.execute(f"SELECT COUNT(*) FROM decisions WHERE {_WAITING_FOR_LABEL}").fetchone()[0]
 
 
-# The emails waiting for a label, each with whether it needs me (needs_me). The same rule as
-# flagged_emails(): the full read has the last word, and without one, triage's first look.
+# The emails waiting for a label, each with whether it needs me (needs_me).
 _UNSORTED_EMAILS = f"""
-    SELECT decisions.*, COALESCE(f.needs_me = 'yes', decisions.needs_reply = 1 OR decisions.needs_action = 1) AS needs_me
+    SELECT decisions.*, {_NEEDS_ME} AS needs_me
     FROM decisions LEFT JOIN full_reads AS f ON f.message_id = decisions.message_id
     WHERE {_WAITING_FOR_LABEL}
 """

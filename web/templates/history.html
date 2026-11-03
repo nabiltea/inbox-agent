@@ -1,12 +1,18 @@
-{# The History page: what each sorting run did, newest first. It fills the slots in base.html,
-   which draws the rest. #}
+{# The History page: a way to find any email, and what each sorting run did, newest first. It fills
+   the slots in base.html, which draws the rest. #}
 {% extends "base.html" %}
 {% from "_macros.html" import tag %}
 
 {% block title %}History · {% endblock %}
 
 {% block content %}
+  {% set list_address = url_for('find_email').path %}
+  {% set link_style = "text-blue-600 hover:underline" %}
+
   <h1 class="text-2xl font-semibold">History</h1>
+
+  {% include "_email_search.html" %}
+  <p class="mt-2 text-sm"><a href="{{ list_address }}" class="{{ link_style }}">See all emails<span aria-hidden="true"> →</span></a></p>
 
   <h2 class="mt-6 font-medium">Runs</h2>
   {% if runs %}
@@ -24,6 +30,12 @@
             {% if run.unsorted %}· {{ run.unsorted }} in Unsorted{% endif %}
             {% if run.changed_by_hand %}· you changed {{ run.changed_by_hand }} by hand{% endif %}
           </p>
+          {# urlencode makes a run's name or a label like "Orders & Payments" safe in an address #}
+          <p class="mt-2 text-sm">
+            <a href="{{ list_address }}?{{ {'run': run.run_id}|urlencode }}" class="{{ link_style }}">
+              See {{ "this email" if run.emails == 1 else "these " ~ "{:,}".format(run.emails) ~ " emails" }}<span aria-hidden="true"> →</span>
+            </a>
+          </p>
           {# <details> is a fold the browser handles by itself, as on the other pages. These are the
              labels the emails have now, so they match Gmail, including my hand changes. #}
           {% set labels = label_counts[run.run_id] %}
@@ -34,7 +46,7 @@
             <ul class="mt-2 grid gap-x-8 gap-y-0.5 sm:grid-cols-2">
               {% for label in labels %}
                 <li class="flex justify-between gap-4">
-                  <span class="min-w-0">{{ label.label }}</span>
+                  <a href="{{ list_address }}?{{ {'run': run.run_id, 'label': label.label}|urlencode }}" class="min-w-0 {{ link_style }}">{{ label.label }}</a>
                   <span class="text-gray-600">{{ "{:,}".format(label.emails) }}</span>
                 </li>
               {% endfor %}

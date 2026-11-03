@@ -1,0 +1,9 @@
+{# The search box above the list of emails, also on the History page itself. A plain form that only
+   looks, so it needs no secret code. Hidden fields keep a run or label filter while searching in it. #}
+<form method="get" action="{{ url_for('find_email').path }}" role="search" class="mt-4 flex max-w-xl gap-2">
+  <input type="search" name="q" value="{{ search }}" maxlength="{{ max_search }}" placeholder="Search by sender or subject" aria-label="Search by sender or subject"
+         class="min-w-0 flex-1 rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-900">
+  {% if run %}<input type="hidden" name="run" value="{{ run }}">{% endif %}
+  {% if label %}<input type="hidden" name="label" value="{{ label }}">{% endif %}
+  <button type="submit" class="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-800 hover:bg-gray-50">Search</button>
+</form>

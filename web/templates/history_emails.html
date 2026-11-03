@@ -1,0 +1,65 @@
+{# The list of every email the agent has sorted, part of the History page: newest first, with a
+   search, filters for a run and a label, and pages. It fills the slots in base.html, which draws the rest. #}
+{% extends "base.html" %}
+
+{% block title %}Find an email · {% endblock %}
+
+{# Added to the Gmail notice in base.html when Gmail couldn't be checked #}
+{% block gmail_problem_note %}
+  <p class="mt-1 text-sm">Until then, an email you've archived yourself may still show as in your inbox.</p>
+{% endblock %}
+
+{% block content %}
+  {% set list_address = url_for('find_email').path %}
+  {% set link_style = "text-blue-600 hover:underline" %}
+
+  <p class="text-sm"><a href="{{ url_for('history').path }}" class="{{ link_style }}"><span aria-hidden="true">← </span>History</a></p>
+  <div class="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+    <h1 class="text-2xl font-semibold">Find an email</h1>
+    {% if total %}
+      <span class="text-sm text-gray-600">{{ "{:,}".format(first + 1) }} to {{ "{:,}".format(first + emails|length) }} of {{ "{:,}".format(total) }}, newest first</span>
+    {% endif %}
+  </div>
+
+  {% include "_email_search.html" %}
+
+  {# What the list is limited to, and the way out #}
+  {% if filters %}
+    <p class="mt-2 text-sm text-gray-600">
+      {% if run %}
+        {% if run_started %}In the run of {{ run_started|show_logged_moment }}.{% else %}That run isn't in the log any more.{% endif %}
+      {% endif %}
+      {% if label %}With the label {{ label }}.{% endif %}
+      <a href="{{ list_address }}" class="{{ link_style }}">Show all emails</a>
+    </p>
+  {% endif %}
+
+  {% if emails %}
+    <ul class="mt-4 divide-y divide-gray-200 rounded-lg bg-white shadow-sm">
+      {% for email, in_inbox in emails %}
+        {% include "_email_row.html" %}
+      {% endfor %}
+    </ul>
+
+    {# urlencode makes a label like "Orders & Payments" safe in an address. dict() adds the page to the filters. #}
+    {% if last_page > 1 %}
+      <nav aria-label="Pages" class="mt-4 flex items-center justify-between gap-4 text-sm">
+        {% if page > 1 %}
+          <a href="{{ list_address }}?{{ dict(filters, page=page - 1)|urlencode }}" class="{{ link_style }}"><span aria-hidden="true">← </span>Newer</a>
+        {% else %}
+          <span></span>
+        {% endif %}
+        <span class="text-gray-600">Page {{ page }} of {{ last_page }}</span>
+        {% if page < last_page %}
+          <a href="{{ list_address }}?{{ dict(filters, page=page + 1)|urlencode }}" class="{{ link_style }}">Older<span aria-hidden="true"> →</span></a>
+        {% else %}
+          <span></span>
+        {% endif %}
+      </nav>
+    {% endif %}
+  {% else %}
+    <div class="mt-4 rounded-lg bg-white p-6 shadow-sm">
+      <p class="text-gray-600">No emails found.</p>
+    </div>
+  {% endif %}
+{% endblock %}
