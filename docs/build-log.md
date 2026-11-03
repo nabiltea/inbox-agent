@@ -1037,6 +1037,17 @@ I planned a move from my Windows PC to my MacBook, then decided to keep the proj
   - **An Intel Mac would be harder.** `cryptography` 50.0.2 has no ready-made version for it, so it would have to be built from its source code. Setup says so.
   - **Two Setup notes had drifted.** The Microsoft Store note, written for the Claude Desktop step, had ended up in the Drafter step, and the line about the log being a database had left the SQLite Viewer step. Both are back in place.
 
+### A short README
+
+The README had grown to about 37,800 words, because everything went into it as I built. That was useful to me, but nobody looking at the project reads that much, and its top had gone out of date. So the README is now one page, and the long text lives in `docs/`.
+
+- **Decided:**
+  - **Move the long text, don't delete it.** It's the record of every decision, which I want for interviews. Git would have kept a deleted version, but hidden away. A summary on top of the long file would have been the least work, but the file would still be huge.
+  - **This log stays word for word,** because it's history. In the design text I corrected what had stopped being true.
+  - **The README says what isn't done.** It separates what's in use on my real inbox from what has only run on copies, so nobody takes a tested button for one I've used.
+- **Result:** of the old README's 1,240 lines, 17 differ in the new files, and a script compared every line. One is the out-of-date status paragraph, which the new README replaces, and the other 16 are the corrections.
+- **Found:** three claims in the design text were wrong, not just out of date. The page never "groups similar suggestions": it lists each email with its own. The diagram showed drafts on the web page, which isn't built yet. And it said I sign in to Gmail by running a script, when I now do it from the page.
+
 ## What's left
 
 - [x] **Step 1:** First call to Claude
@@ -1112,7 +1123,8 @@ I planned a move from my Windows PC to my MacBook, then decided to keep the proj
 - [ ] Reorganize the project into folders, as its own step after Step 7, with one setting for where the data files live
 - [ ] Learn from my edits: compare each draft with what I actually sent, and have Claude suggest updates to the writing-style file for me to approve
 - [ ] Demo mode with made-up emails, safe to show in interviews and maybe online, together with using the project on both my PC and my laptop (a "To do" Gmail label, with Gmail as the source of truth)
-- [ ] **Step 8:** accuracy tests (evals), README polish and a demo video
+- [x] A short README, with the long text in `docs/`
+- [ ] **Step 8:** accuracy tests (evals) and a demo video
 - [ ] **Cost:** try prompt caching for triage's system prompt, which is the same for every email
 
 **Open questions**
