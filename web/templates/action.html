@@ -64,10 +64,11 @@
               </p>
             {% endif %}
             <p class="mt-0.5 text-sm text-gray-500">
-              {{ todo.sender }} · {{ todo.subject }} · {{ todo.received|show_date }} · {{ todo.label }}
+              {{ todo.sender }} · {% if todo.subject != todo.what_to_do %}{{ todo.subject }} · {% endif %}{{ todo.received|show_date }} · {{ todo.label }}
               {% if todo.more %}
                 · <span class="text-blue-600">+{{ todo.more }} more {{ "email" if todo.more == 1 else "emails" }}</span>
               {% endif %}
+              {% if todo.marked %}· You added this on the History page{% endif %}
             </p>
             {# <details> is a fold the browser handles by itself, with no JavaScript: clicking
                the <summary> line opens and closes the rest. #}

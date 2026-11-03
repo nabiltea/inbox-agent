@@ -123,8 +123,10 @@ def list_todos() -> list[dict]:
     it in Gmail. Each entry describes the task's newest flagged email still in my inbox:
     "what_to_do" says what to do, for example "Sign the contract on Dropbox Sign", and
     "more" counts the task's other flagged emails still in my inbox. "others" lists its other
-    Gmail conversations, usually none. Use read_thread with a "thread_id" to read a whole
-    conversation, and give me its "gmail_link" when I want to open it in Gmail.
+    Gmail conversations, usually none. "marked" means I added it to the list myself, because
+    the agent missed it, so "what_to_do" may only be its subject. Use read_thread with a
+    "thread_id" to read a whole conversation, and give me its "gmail_link" when I want to open
+    it in Gmail.
 
     "urgency" is worked out by code, so use it as it is: "urgent" (due within 2 days),
     "time-sensitive" (no date, but the email says it has to happen soon), "overdue" (its

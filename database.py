@@ -13,10 +13,26 @@ from pathlib import Path
 
 DB_FILE = Path(__file__).parent / "inbox_agent.db"
 
-# Whether an email needs me, written once for every query that asks. The full read has the last
-# word: COALESCE takes its answer, and without a full read (NULL) it takes triage's first look
-# instead. f is the email's row in full_reads, which those queries add with a LEFT JOIN.
-_NEEDS_ME = "COALESCE(f.needs_me = 'yes', decisions.needs_reply = 1 OR decisions.needs_action = 1)"
+# Whether an email needs me, written once for every query that asks. First what the agent
+# thinks. The full read has the last word: COALESCE takes its answer, and without a full read
+# (NULL) it takes triage's first look instead. f is the email's row in full_reads, which those
+# queries add with a LEFT JOIN.
+_AGENT_SAYS_NEEDS_ME = "COALESCE(f.needs_me = 'yes', decisions.needs_reply = 1 OR decisions.needs_action = 1)"
+
+# Then whether I've marked it as needing action. That's a row in label_changes, beside Claude's
+# answer and never over it, because "Claude said no, I said yes" is exactly the miss that Step 8's
+# accuracy tests look for.
+_I_MARKED = """EXISTS (
+    SELECT 1 FROM label_changes AS m
+    WHERE m.message_id = decisions.message_id AND m.action = 'needs_action' AND m.undone_at IS NULL
+)"""
+
+_NEEDS_ME = f"({_I_MARKED} OR {_AGENT_SAYS_NEEDS_ME})"
+
+# Whether an email is a to-do for as long as it's in my inbox: I marked it, or the agent left
+# it there because it needs me. An email the agent archived although it was flagged, for being
+# old, doesn't count until I mark it.
+_FLAGGED = f"({_I_MARKED} OR (decisions.archived = 0 AND {_AGENT_SAYS_NEEDS_ME}))"
 
 
 def plain_text(text):
@@ -99,10 +115,11 @@ def connect():
     # stays right, and this table is the statement, with one row per change. That also
     # keeps Claude's first answer, which the accuracy tests in Step 8 can compare with mine.
     # action says what I did: "picked" one of my labels, "approved" the suggestion, "edited"
-    # it before approving, or "rejected" it, which keeps the email under Unsorted. The next
-    # four columns are what undoing one change needs: whether the agent had added the old
-    # label, whether this change added the new one (not if the email already had it), whether
-    # it took the email out of the inbox, and whether it added the label itself to labels.json.
+    # it before approving, "rejected" it, which keeps the email under Unsorted, or marked it
+    # "needs_action", which keeps its label too. The next five columns are what undoing one
+    # change needs: whether the agent had added the old label, whether this change added the
+    # new one (not if the email already had it), whether it took the email out of the inbox,
+    # whether it added the label itself to labels.json, and whether it put the email back in the inbox.
     # undone_at is when I undid the change. Like a line on a statement, it gets crossed out,
     # not erased, so Step 8 can still see it. ON DELETE CASCADE works as it does for full_reads above.
     conn.execute("""
@@ -117,15 +134,18 @@ def connect():
             new_label_added INTEGER,
             left_inbox INTEGER,
             label_created INTEGER DEFAULT 0,
-            undone_at TEXT
+            undone_at TEXT,
+            entered_inbox INTEGER DEFAULT 0
         )
     """)
-    # label_created and undone_at came after this table did. The same kind of migration as above.
+    # The last three columns came after this table did. The same kind of migration as above.
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(label_changes)")}
     if "label_created" not in columns:
         conn.execute("ALTER TABLE label_changes ADD COLUMN label_created INTEGER DEFAULT 0")
     if "undone_at" not in columns:
         conn.execute("ALTER TABLE label_changes ADD COLUMN undone_at TEXT")
+    if "entered_inbox" not in columns:
+        conn.execute("ALTER TABLE label_changes ADD COLUMN entered_inbox INTEGER DEFAULT 0")
     # SQLite only enforces links between tables (like the one above) when this is
     # switched on, and only for this connection, so it's switched on every time.
     conn.execute("PRAGMA foreign_keys = ON")
@@ -191,22 +211,22 @@ def save_full_read(conn, message_id, result, model, cost):
 
 
 def flagged_emails(conn):
-    """The emails that need me and that the agent left in the inbox, newest first, with their full read if any.
+    """The emails the agent left in the inbox because they need me, or that I've marked as needing action.
 
-    An email needs me if its full read says yes or, when it had no full read, if
-    triage's first look flagged it: the full read has the last word. There's no time
-    limit: an email that needs me is still a to-do however old it is. This only knows
-    what the agent did, so an email I've archived myself since is still included.
-    todos.py leaves those out.
+    Newest first, with their full read if any. An email needs me if its full read says yes or,
+    when it had no full read, if triage's first look flagged it: the full read has the last
+    word. There's no time limit: an email that needs me is still a to-do however old it is.
+    This doesn't know what's in my inbox now, so an email I've archived myself since is still
+    included. todos.py leaves those out.
 
     LEFT JOIN adds each email's full read from full_reads, and leaves those columns
     empty (NULL) for an email that has none.
     """
     return conn.execute(f"""
         SELECT decisions.*, f.needs_me AS full_read, f.what_to_do, f.kind, f.steps, f.place, f.deadline,
-               f.time_sensitive, f.reason AS full_read_reason
+               f.time_sensitive, f.reason AS full_read_reason, {_I_MARKED} AS marked
         FROM decisions LEFT JOIN full_reads AS f ON f.message_id = decisions.message_id
-        WHERE decisions.archived = 0 AND {_NEEDS_ME}
+        WHERE {_FLAGGED}
         ORDER BY decisions.received_at DESC
     """).fetchall()
 
@@ -231,9 +251,10 @@ def _matching(search, run_id, label):
 
 
 # The emails in the list on the History page, each with whether it needs me, whether it's
-# flagged (the same rule as flagged_emails()) and why the full read said what it did.
+# flagged (the same rule as flagged_emails()), whether I've marked it, and why the full read
+# said what it did.
 _LISTED_EMAILS = f"""
-    SELECT decisions.*, {_NEEDS_ME} AS needs_me, decisions.archived = 0 AND {_NEEDS_ME} AS flagged, f.reason AS full_read_reason
+    SELECT decisions.*, {_NEEDS_ME} AS needs_me, {_FLAGGED} AS flagged, {_I_MARKED} AS marked, f.reason AS full_read_reason
     FROM decisions LEFT JOIN full_reads AS f ON f.message_id = decisions.message_id
 """
 
@@ -297,12 +318,12 @@ def last_run(conn):
 # left in the inbox as needing me, how many have the label Unsorted now, how many I've changed
 # by hand, and what it cost, with its full reads. backlog.py starts its runs' names with "backlog-".
 #
-# Needing me follows the same rule as flagged_emails(): it has to be still in the inbox.
-# EXISTS counts an email once, however many changes it has.
+# Needing me here is what the agent did in that run: it left the email in the inbox because
+# it needs me. EXISTS counts an email once, however many changes it has.
 _RUN_NUMBERS = f"""
     SELECT decisions.run_id, decisions.run_id LIKE 'backlog-%' AS from_backlog,
            MIN(decisions.processed_at) AS started, COUNT(*) AS emails, SUM(decisions.archived) AS archived,
-           SUM(decisions.archived = 0 AND {_NEEDS_ME}) AS flagged,
+           SUM(decisions.archived = 0 AND {_AGENT_SAYS_NEEDS_ME}) AS flagged,
            SUM(decisions.label = 'Unsorted') AS unsorted,
            SUM(EXISTS (SELECT 1 FROM label_changes AS c WHERE c.message_id = decisions.message_id AND c.undone_at IS NULL)) AS changed_by_hand,
            COALESCE(SUM(decisions.cost), 0) + COALESCE(SUM(f.cost), 0) AS cost
@@ -403,11 +424,15 @@ def save_label_change(conn, message_id, action, label, label_added, left_inbox, 
 
 
 # The changes I've made by hand and haven't undone, with which email each one is about. An
-# email can change more than once, so newest says whether this is its latest change. Only that
-# one can be undone: an older one would bring back a label from before the newer change.
+# email's label can change more than once, so newest says whether this is its latest change.
+# Only that one can be undone: an older one would bring back a label from before the newer
+# change. Marking an email has nothing to do with its label, so it's compared only with other marks.
 _MY_CHANGES = """
     SELECT c.*, decisions.subject, decisions.sender, decisions.thread_id,
-           c.id = (SELECT MAX(n.id) FROM label_changes AS n WHERE n.message_id = c.message_id AND n.undone_at IS NULL) AS newest
+           c.id = (
+               SELECT MAX(n.id) FROM label_changes AS n
+               WHERE n.message_id = c.message_id AND n.undone_at IS NULL AND (n.action = 'needs_action') = (c.action = 'needs_action')
+           ) AS newest
     FROM label_changes AS c JOIN decisions ON decisions.message_id = c.message_id
     WHERE c.undone_at IS NULL
 """
@@ -424,26 +449,55 @@ def my_change(conn, change_id):
 
 
 def newest_changes(conn, message_ids):
-    """For some emails in the list: {message ID: its newest change I haven't undone}, for those that have one."""
-    marks = ", ".join("?" * len(message_ids))  # one ? per email, so the IDs still go in as values, never as SQL
-    rows = conn.execute(f"{_MY_CHANGES} AND c.message_id IN ({marks}) ORDER BY c.id", message_ids).fetchall()
-    return {row["message_id"]: row for row in rows}  # a later row replaces an earlier one, so the newest stays
+    """For some emails in the list: {message ID: the changes I can undo}, for those that have any.
+
+    That's at most two: its newest label change, and my mark if I've marked it.
+    """
+    question_marks = ", ".join("?" * len(message_ids))  # one per email, so the IDs still go in as values, never as SQL
+    changes = {}
+    for row in conn.execute(f"{_MY_CHANGES} AND c.message_id IN ({question_marks}) ORDER BY c.id", message_ids):
+        if row["newest"]:
+            changes.setdefault(row["message_id"], []).append(row)
+    return changes
+
+
+def save_needs_action(conn, message_id, entered_inbox):
+    """Record that I marked an email as needing action: a row in label_changes, and nothing in decisions.
+
+    entered_inbox is True when this put the email back in the inbox, which undoing it will
+    reverse. decisions stays as it is, so it still says what the agent did and thought.
+    """
+    email = conn.execute("SELECT label, label_added FROM decisions WHERE message_id = ?", (message_id,)).fetchone()
+    conn.execute(
+        """
+        INSERT INTO label_changes (
+            message_id, changed_at, action, old_label, new_label, old_label_added, new_label_added, left_inbox, entered_inbox
+        ) VALUES (?, ?, 'needs_action', ?, ?, ?, ?, 0, ?)
+        """,
+        (
+            message_id, datetime.now().isoformat(timespec="seconds"),
+            email["label"], email["label"], email["label_added"], email["label_added"], entered_inbox,
+        ),
+    )
+    conn.commit()
 
 
 def save_undone_change(conn, change):
     """Record that I undid a change: the email gets its old label back, and the change's row gets crossed out.
 
     A change that took the email out of the inbox found it there, so the email is back to not
-    being archived. One commit saves both, so a crash can't save only one.
+    being archived. Undoing a mark only crosses it out: it changed nothing else in the log, and
+    the label may have changed since. One commit saves both, so a crash can't save only one.
     """
     conn.execute(
         "UPDATE label_changes SET undone_at = ? WHERE id = ?",
         (datetime.now().isoformat(timespec="seconds"), change["id"]),
     )
-    conn.execute(
-        "UPDATE decisions SET label = ?, label_added = ?, archived = archived AND NOT ? WHERE message_id = ?",
-        (change["old_label"], change["old_label_added"], change["left_inbox"], change["message_id"]),
-    )
+    if change["action"] != "needs_action":
+        conn.execute(
+            "UPDATE decisions SET label = ?, label_added = ?, archived = archived AND NOT ? WHERE message_id = ?",
+            (change["old_label"], change["old_label_added"], change["left_inbox"], change["message_id"]),
+        )
     conn.commit()
 
 

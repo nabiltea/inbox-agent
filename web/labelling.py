@@ -50,6 +50,10 @@ class NotNewestChangeError(RuntimeError):
     """A newer change to the same email has to be undone first, for example because the page is out of date."""
 
 
+class AlreadyNeedsMeError(RuntimeError):
+    """The email is already marked or on my to-do list, for example because the page is out of date. The message says which."""
+
+
 @dataclass
 class Changed:
     """What happened to an email after a click, for its row on the page."""
@@ -70,6 +74,8 @@ class Undone:
     waiting_for_label: bool  # it's back on the Unsorted page. Not if it's still rejected, from before the undone change
     back_in_inbox: bool
     email_gone: bool  # it isn't in Gmail any more, so only the log changed
+    was_mark: bool = False  # what got undone was marking it as needing action, so its label never changed
+    out_of_inbox: bool = False  # the mark had put it back in the inbox, and now it has left again
     created_label: str | None = None  # the label the undone click added to labels.json, if it did
     others_with_label: int = 0  # how many other emails have that label, which is why it stays
     label_stuck: bool = False  # labels.json couldn't be changed, so the label is still there
@@ -231,10 +237,36 @@ def reject_suggestion(message_id):
     return Changed(email["subject"], None, left_inbox, "INBOX" in labels_now and bool(email["needs_me"]))
 
 
+def mark_needs_action(message_id):
+    """Put an email the agent missed on my to-do list: back in the inbox if it isn't there, and marked in the log.
+
+    An email only shows on the list if it's in my inbox. Gmail gets asked, because I may have
+    moved it myself since. Claude's answer stays as it is in the log, beside my mark.
+
+    Returns True, or None if the log doesn't know the email any more, for example because its run has been undone.
+    """
+    with _one_at_a_time, closing(database.connect()) as conn:
+        email = database.listed_email(conn, message_id)
+        if email is None:
+            return None
+        if email["marked"]:
+            raise AlreadyNeedsMeError("it's already marked as needing action.")
+        service = get_gmail_service(allow_browser_sign_in=False)
+        with explain_failures():
+            labels_now = current_labels(service, message_id)
+            if email["flagged"] and "INBOX" in labels_now:
+                raise AlreadyNeedsMeError("it's already on your to-do list.")
+            entered_inbox = "INBOX" not in labels_now
+            if entered_inbox:
+                change_labels(service, message_id, add=["INBOX"])
+        database.save_needs_action(conn, message_id, entered_inbox)
+    return True
+
+
 def _put_back_in_gmail(service, change):
     """Reverse a change in Gmail. Repeating this is harmless, so if it fails partway, the same click finishes it."""
     add, remove = [], []
-    if change["new_label"] != change["old_label"]:  # rejecting keeps the label, so then there's none to swap
+    if change["new_label"] != change["old_label"]:  # rejecting or marking keeps the label, so then there's none to swap
         label_ids = {label["name"]: label["id"] for label in list_labels(service)}
         add.append(_label_id(service, label_ids, change["old_label"]))
         # The new label only comes off if this change added it, and if it's still in Gmail.
@@ -242,6 +274,8 @@ def _put_back_in_gmail(service, change):
             remove.append(label_ids[change["new_label"]])
     if change["left_inbox"]:
         add.append("INBOX")
+    if change["entered_inbox"]:
+        remove.append("INBOX")
     if add or remove:
         change_labels(service, change["message_id"], add=add, remove=remove)
 
@@ -293,6 +327,8 @@ def undo_change(change_id):
             waiting_for_label=database.unsorted_email(conn, change["message_id"]) is not None,
             back_in_inbox=bool(change["left_inbox"]) and not email_gone,
             email_gone=email_gone,
+            was_mark=change["action"] == "needs_action",
+            out_of_inbox=bool(change["entered_inbox"]) and not email_gone,
         )
         if change["label_created"]:
             _forget_new_label(conn, change["new_label"], undone)

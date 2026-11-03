@@ -158,6 +158,8 @@ def show_deadline(deadline):
 
 def what_i_did(change):
     """One of my changes from the log, in a sentence for its row on the History page."""
+    if change["action"] == "needs_action":
+        return "Marked as needing action, and put back in your inbox." if change["entered_inbox"] else "Marked as needing action."
     if change["action"] == "rejected":
         text = "Rejected: no label needed"
     elif change["label_created"]:
@@ -348,10 +350,11 @@ def what_happened(changed):
     return f"{text}."
 
 
-def attempt(request, row_id, change):
+def attempt(request, row_id, change, not_done="Not moved"):
     """Carry out a button's change to one email, on any page.
 
     Returns what happened and no answer, or, if it went wrong, nothing and the answer that says so.
+    not_done is how a problem with the email itself starts, in words that fit the button.
     """
     try:
         return change(), None
@@ -362,8 +365,8 @@ def attempt(request, row_id, change):
         problem = "Not moved: choose a label from the list."
     except labelling.SameLabelError:
         problem = "Not moved: it already has that label."
-    except EmailGoneError as error:
-        problem = f"Not moved: {error}"
+    except (EmailGoneError, labelling.AlreadyNeedsMeError) as error:
+        problem = f"{not_done}: {error}"
     except (labelling.BadLabelError, LabelRefusedError) as error:
         problem = f"Not saved: {error}"
     except sorting.SortingNowError:
@@ -442,6 +445,8 @@ def what_undo_did(undone):
     where = "on the Unsorted page" if undone.waiting_for_label else f"under {undone.old_label}"
     if undone.email_gone:
         text = "Undone, but this email isn't in Gmail any more, so only the log changed."
+    elif undone.was_mark:
+        text = "Undone: it's off your to-do list, and out of your inbox again." if undone.out_of_inbox else "Undone: it's off your to-do list."
     elif undone.back_in_inbox:
         text = f"Undone: it's back {where}, and back in your inbox."
     else:
@@ -495,14 +500,14 @@ def email_row(request, message_id, message=None):
     inbox_ids, _ = check_inbox()
     with closing(database.connect()) as conn:
         email = database.listed_email(conn, message_id)
-        change = database.newest_changes(conn, [message_id]).get(message_id)
+        changes = database.newest_changes(conn, [message_id]).get(message_id, [])
     return templates.TemplateResponse(
         request=request,
         name="_email_row.html",
         context={
             "email": email,
             "in_inbox": email is not None and in_my_inbox(email, inbox_ids),
-            "change": change,
+            "changes": changes,
             "message": message,
             "labels": my_labels(),
             "gmail_address": saved_account(),
@@ -515,6 +520,13 @@ def email_row(request, message_id, message=None):
 def change_email_label(request: Request, message_id: str, label: Annotated[str, Form()] = ""):
     """Give an email another of my labels, and draw its row again."""
     _, problem = attempt(request, message_id, lambda: labelling.change_label(message_id, label))
+    return problem or email_row(request, message_id)
+
+
+@app.post("/history/emails/{message_id}/needs-action")
+def mark_needs_action(request: Request, message_id: str):
+    """Put an email the agent missed on my to-do list, and draw its row again."""
+    _, problem = attempt(request, message_id, lambda: labelling.mark_needs_action(message_id), not_done="Not added")
     return problem or email_row(request, message_id)
 
 
@@ -546,7 +558,7 @@ def find_email(request: Request, q: str = "", run: str = "", label: str = "", pa
         name="history_emails.html",
         context={
             "active": "history",
-            "emails": [(email, in_my_inbox(email, inbox_ids), changes.get(email["message_id"])) for email in emails],
+            "emails": [(email, in_my_inbox(email, inbox_ids), changes.get(email["message_id"], [])) for email in emails],
             "labels": my_labels(),  # for each row's dropdown
             "total": total,
             "first": first,

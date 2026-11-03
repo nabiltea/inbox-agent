@@ -36,7 +36,7 @@
 
   {% if emails %}
     <ul class="mt-4 divide-y divide-gray-200 rounded-lg bg-white shadow-sm">
-      {% for email, in_inbox, change in emails %}
+      {% for email, in_inbox, changes in emails %}
         {% include "_email_row.html" %}
       {% endfor %}
     </ul>

@@ -1021,6 +1021,13 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - `change_email_label()` and `undo_change_in_list()` in `web/app.py` answer by drawing the row again with `email_row()`, so I keep my place in the list. `attempt()` now holds what every button does when something goes wrong, instead of each one having its own copy.
   - `my_labels()`: a broken `labels.json` no longer takes the list down. The rows just lose their dropdown until it's fixed.
   - **Smaller choices:** the dropdown leaves out the label the email has. A move no longer makes a label again if I've deleted it in Gmail, which also goes for the Unsorted page's buttons. An open fold takes a whole line at every width now that a row has two.
+- **Built, part 5: the "Needs action" button:**
+  - `mark_needs_action()` in `web/labelling.py`: the to-do list only shows what's in my inbox, so the click puts the email back there if it isn't, after asking Gmail. `save_needs_action()` in `database.py` adds a row to `label_changes`, with `entered_inbox` saying whether the click put it back. Nothing in `decisions` or `full_reads` changes, so the log still says what the agent did and thought.
+  - **The rule, in three pieces:** `_AGENT_SAYS_NEEDS_ME` is Claude's answer, `_I_MARKED` is my mark, and `_FLAGGED` says what counts as a to-do while it's in my inbox: either my mark, or the agent having left it there. `flagged_emails()` uses it, so Action needed, the home page and Claude Desktop all get a marked email from one change. A run's numbers keep to Claude's answer, because they say what that run did. An email the agent archived for being old doesn't count until I mark it, even if it's back in my inbox.
+  - **On the to-do list,** in `todos.py`: an email I marked needs an action, unless it already needs a reply. The to-do is what Claude said to do if it said anything, and otherwise the subject. If the full read said no, its reason stays off the to-do, where it would only argue with me, and stays in the list's Why fold for checking. The row says "You added this on the History page", and doesn't repeat the subject when that's also the to-do.
+  - **Undoing it:** `_put_back_in_gmail()` takes the email out of the inbox again if the click put it there, and `save_undone_change()` only crosses out the mark, because the label may have changed since. Marks and label changes don't get in each other's way: `newest` in `_MY_CHANGES` compares a mark only with marks, so either can be undone first, and `newest_changes()` gives a row up to two Undos.
+  - **On the row:** a Needs action button at the start of its actions, with no button on an email that's already a to-do or marked.
+  - **Smaller choices:** an email has one mark at a time. If I archive a marked email and it turns out not to be done, I can move it back to the inbox in Gmail, or Undo and press the button again. Marking works during a sort, since sorting only touches new emails, while Undo still waits.
 - **Learned:**
   - A test that can't fail proves nothing. I broke the page's SQL on purpose in two ways, and the tests failed 14 and 54 times ("mutation testing").
   - A test's expected numbers should come from somewhere other than the code it's testing. Mine add up each run one row at a time in Python, rather than reuse the page's SQL.
@@ -1032,6 +1039,8 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - A screenshot can catch a page mid-update. One showed an error in the wrong colour and size, while the browser's own numbers said it was right, and a second screenshot agreed with them.
   - Allowing a second change to an email broke an assumption that part 3 relied on without saying so: one change per email. New features can do that to old code, so I wrote the rule down in the code (`newest`) and tested the order of undoing both ways.
   - Reworking shared code needs proof for everyone who shares it. Since `_move()` is also behind the Unsorted page's buttons, I ran the committed version and the new one through the same 10 emails and compared every answer, request, log row and the `labels.json` file.
+  - Keeping a person's answer beside the model's, not over it, turns a correction into data. "Claude said no, I said yes" is a labelled miss (a "false negative"), which is what an accuracy test needs. Overwriting Claude's flag would have been simpler and thrown that away.
+  - A test that checks something is absent can pass for the wrong reason. Mine looked for "Claude's reason" in raw HTML, where the apostrophe is written `&#39;`, so it would never have found it even if it were there. Now it also checks the row itself is on the page, and reads plain text.
 - **Result:**
   - **Part 1, 151 free tests, on copies of my real log:**
     - **The numbers:** every number on each card matches what the rows say, worked out separately: 3 runs of 99, 2,836 and 3,653, newest first, costing $0.05, $0.66 and $0.86, and each run's label counts add up to its emails.
@@ -1071,6 +1080,18 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
     - **Breaking the code on purpose:** 19 different breaks each make tests fail.
     - My real log's rows and `labels.json` stayed the same. Tests for parts 1 to 3 still pass.
   - **Part 4, in a real browser, with made-up emails and a stand-in for Gmail:** I opened the fold, chose a label and pressed Move twice with real clicks. The row updated with no reload and offered only the newest change's Undo, and "Your changes" explained why the older one had no button. When the stand-in failed on purpose, the problem showed in the row, and the same click then worked. Both folds open stack neatly at desktop and phone width, the page is no wider than a phone, and the console shows no errors.
+  - **Part 5, 239 free tests, on copies of my real log and `labels.json`, with a stand-in for Gmail's API:**
+    - **Marking:** an archived email goes back in the inbox with its label, onto Action needed, the home page's count and Claude Desktop's list. Its row in `decisions` and its full read stay exactly as they were, and the run's numbers don't move. An email already in my inbox needs no change in Gmail.
+    - **The to-do:** the subject, or what Claude said to do if it said anything. A reply stays a reply, and a full read's "no" stays off the list while its "yes" keeps its words and reason. An old flagged email back in my inbox stays off the list until I mark it.
+    - **Undoing:** the email leaves the list and the inbox again, or only the list if it was already in the inbox. It also works after I've archived the email, and for an email deleted from Gmail. It can then be marked again.
+    - **With label changes:** a mark and a label change can be undone in either order, and undoing a mark never touches the label. Label changes still go newest first, whatever marks are between them. A marked Unsorted email stays in the inbox when moved or rejected, and stays waiting for a label until then.
+    - **Refused, with nothing changed:** an email already on the list, one already marked, one the log doesn't know, and one deleted from Gmail.
+    - **Failures:** Gmail's 2 requests for marking each failed in 8 different ways, and so did the 1 for undoing, with nothing recorded, and the same click worked afterwards.
+    - **The rest:** 8 clicks at the same moment gave one mark and one change in Gmail. 6 kinds of forged click were refused. Text trying to be code stays plain text on all three pages. A marked email in a conversation already on the list adds to its row. The real `undo.py` reverses a run with marks in it. An older log gets the new column.
+    - **Nothing else moved:** with no marks, the to-do list, the run numbers and the list's rows are the same as the committed code's, and the home page, Action needed and Unsorted come out the same from both apps, apart from spaces and the secret code.
+    - **Breaking the code on purpose:** 21 different breaks each make tests fail.
+    - My real log's rows and `labels.json` stayed the same. Tests for parts 1 to 4 still pass.
+  - **Part 5, in a real browser, with made-up emails and a stand-in for Gmail:** a real click on Needs action added the To-do tag and an Undo without a reload, and the email showed up on Action needed with its tag and note. Undo took it off again, and the button came back. It fits at phone width, with no console errors.
 - **Found:**
   - **The refusal at email 37 isn't explained by the per-minute allowance.** Fetching one email costs 20 units, so 45 emails is only 900 of 6,000. Google also describes a limit on requests at the same moment, which batches can trigger. That may be the cause, and then waiting a full minute would be longer than needed. It's on the list below.
   - **The log and `labels.json` haven't changed since their backups in `backups/`.** The real checks get a fresh backup anyway, because the log will have changed by then.
@@ -1080,6 +1101,9 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - **Undoing an edited label loses my wording.** The Unsorted row shows Claude's suggestion again, because the log doesn't keep what I typed.
   - **After Change label, a filtered list can be out of date until the next page load.** In a list filtered to one label, the row stays where it is, showing its new label, so I can still undo it there.
   - **No new labels from the list.** The dropdown only has labels I already have. Making one stays on the Unsorted page, so an email that needs a label I don't have yet has to wait until I've made it there or added it to `labels.json`.
+  - **A marked email has no deadline or steps,** because there's no paid full read behind the button. It sits with the normal to-dos, under the urgent ones. A full read at the click could add those, for about $0.003, if I ever miss them.
+  - **A finished mark stays under "Your changes".** The log can't tell that I've finished a to-do, only that it left my inbox, so the row keeps its Undo. It's harmless, and it does mean that list only ever grows.
+  - **The same rare gap as before:** if the log can't be written after Gmail has already changed, the page says it didn't finish, and the same click finishes it. But the mark then notes that the email was already in my inbox, so undoing it would leave it there.
 
 ## What's left
 
@@ -1136,7 +1160,7 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - [x] part 2: find an email: a list of all emails with a search, and Claude's reason for each
   - [x] part 3: my changes, including rejected emails, and undoing one of them
   - [x] part 4: change the label of any email
-  - [ ] part 5: the "Needs action" button, and undoing it
+  - [x] part 5: the "Needs action" button, and undoing it
   - [ ] part 6: undoing a whole run from the page, sharing `undo.py`'s logic
 - [ ] Once the History page is up, the real checks, in this order, with a fresh backup first:
   - [ ] click Open in Gmail on an archived email, which changes nothing

@@ -66,13 +66,14 @@ class Todo:
     deadline: date | None  # from the task's newest email that gives one (see list_todos)
     urgency: str  # one of ORDER
     others: list[OtherConversation]  # the task's other conversations, newest first. Usually none
+    marked: bool = False  # I added it myself, with the History page's "Needs action" button
 
 
 def list_todos(flagged, inbox_ids, today=None):
     """My to-do list: one Todo per task, most pressing first (see _same_task and _position).
 
-    flagged: the emails that need me and that the agent left in the inbox, newest first,
-    from database.flagged_emails().
+    flagged: the emails the agent left in the inbox because they need me, or that I've marked
+    as needing action, newest first, from database.flagged_emails().
     inbox_ids: the IDs of the emails in my inbox right now, from
     gmail_client.inbox_message_ids(). None means Gmail couldn't be asked: then nothing is
     left out, so the list may include emails I've archived since.
@@ -99,14 +100,16 @@ def list_todos(flagged, inbox_ids, today=None):
                 todo.urgency = _urgency(deadline, email["time_sensitive"], today)
             continue
         # The full read has the last word: its kind makes an email one or the other. Without
-        # one, triage's flags stand, and those can be both.
+        # one, triage's flags stand, and those can be both. An email I marked myself needs an
+        # action unless it already needs a reply.
         read = email["full_read"] is not None
+        marked = bool(email["marked"])
         needs_reply = email["kind"] in REPLY_KINDS if read else bool(email["needs_reply"])
         todos[email["thread_id"]] = Todo(
             thread_id=email["thread_id"],
             message_id=email["message_id"],
             needs_reply=needs_reply,
-            needs_action=not needs_reply if read else bool(email["needs_action"]),
+            needs_action=not needs_reply if read else bool(email["needs_action"]) or (marked and not needs_reply),
             what_to_do=_what_to_do(email),
             sender=email["sender"],
             subject=email["subject"],
@@ -116,10 +119,12 @@ def list_todos(flagged, inbox_ids, today=None):
             kind=email["kind"],
             steps=json.loads(email["steps"]) if email["steps"] else [],
             place=email["place"],
-            why=email["full_read_reason"],
+            # If the full read said no and I said yes, its reason would only argue with me.
+            why=email["full_read_reason"] if email["full_read"] == "yes" or not marked else None,
             deadline=deadline,
             urgency=_urgency(deadline, email["time_sensitive"], today),
             others=[],
+            marked=marked,
         )
     return sorted(_one_row_per_task(todos.values(), today), key=_position)
 
