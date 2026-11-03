@@ -1052,6 +1052,22 @@ The README had grown to about 37,800 words, because everything went into it as I
   - A script compared the pages in the pictures with my real log, labels and profile. The first pass found no private details, but it did catch overlaps I'd rather not have: a made-up name that a real sender also has, two of my real label names, a common subject, and the time of a real run. I changed them all. Now only the public services Dropbox and LinkedIn appear in both.
 - **Found:** three claims in the design text were wrong, not just out of date. The page never "groups similar suggestions": it lists each email with its own. The diagram showed drafts on the web page, which isn't built yet. And it said I sign in to Gmail by running a script, when I now do it from the page.
 
+### Making it public
+
+Early commits held real details from my emails, like names and a booking code, even after I'd taken them out of the files. Git keeps every old version, so before putting this project on my CV, I cleaned the history.
+
+- **Decided:**
+  - **A new repo, not a rewrite of the old one.** GitHub warns that after a force push, old commits can stay reachable by their ID until its support team clears them. A new repo never held them, and the old one stays private as a backup, so nothing could be lost.
+  - **Keep the history.** A new repo with a single commit would have been quicker, but the commits show how the project was built, step by step.
+  - **A private address on my commits.** Every commit shows its author's email address, so on a public repo anyone can read it. The commits now use GitHub's no-reply address.
+- **Built:** nothing in the app. `git-filter-repo`, the tool GitHub recommends, rewrote a fresh copy using a list of exact lines, which isn't in Git.
+- **Learned:**
+  - **Deleting something from a file doesn't delete it from Git.** Every earlier commit still holds it.
+  - **A scan can't do this alone.** Comparing the history with my real log found some of it, but amounts and dates look like any other text, so I also read all 1,098 old lines and the commit messages.
+  - **Changing commits changes their IDs,** so a folder with the old history could bring it all back with one push. That's why my project folder moved to the clean history too.
+- **Result:** 39 old lines changed, across 21 commits. A script compared every file in every commit: the only differences are those lines, the 40 commits keep their messages and dates, and the newest files are identical byte for byte. The same checks fail on the old history, as they should.
+- **Found:** this only protects the repo from now on. A copy made while the old history was public would still have those details, so the real fix is keeping them out from the first commit.
+
 ## What's left
 
 - [x] **Step 1:** First call to Claude
@@ -1128,6 +1144,7 @@ The README had grown to about 37,800 words, because everything went into it as I
 - [ ] Learn from my edits: compare each draft with what I actually sent, and have Claude suggest updates to the writing-style file for me to approve
 - [ ] Demo mode with made-up emails, safe to show in interviews and maybe online, together with using the project on both my PC and my laptop (a "To do" Gmail label, with Gmail as the source of truth)
 - [x] A short README with screenshots, with the long text in `docs/`
+- [x] Clean real details out of the Git history, in a new repo that can be public
 - [ ] **Step 8:** accuracy tests (evals) and a demo video
 - [ ] **Cost:** try prompt caching for triage's system prompt, which is the same for every email
 
