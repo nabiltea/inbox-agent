@@ -1,0 +1,3 @@
+{# What went wrong with a click in a row, on the Unsorted or History page. hx-swap-oob puts it in the
+   row's own empty place for it, the one with the same id. #}
+<p id="problem-{{ row_id }}" hx-swap-oob="true" role="alert" class="mt-2 text-sm text-red-700">{{ problem }}</p>

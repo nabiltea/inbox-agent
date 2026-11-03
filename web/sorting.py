@@ -12,7 +12,7 @@ lost: the emails it hadn't got to are still new the next time.
 
 import logging
 import threading
-from contextlib import closing
+from contextlib import closing, contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -87,6 +87,23 @@ def start():
 def current():
     """The latest run, or None."""
     return _run
+
+
+class SortingNowError(RuntimeError):
+    """A run is going, so a change that mustn't overlap with one has to wait."""
+
+
+@contextmanager
+def no_sorting_meanwhile():
+    """For a change that mustn't overlap with a run, like taking a label away from Claude's choices.
+
+    Raises SortingNowError if a run is going. It holds the lock that starting a run needs, so
+    a press of the button during the change waits for the change to finish.
+    """
+    with _starting:
+        if _run is not None and _run.running:
+            raise SortingNowError("sorting is going")
+        yield
 
 
 def sort_context(request):

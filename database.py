@@ -99,11 +99,12 @@ def connect():
     # stays right, and this table is the statement, with one row per change. That also
     # keeps Claude's first answer, which the accuracy tests in Step 8 can compare with mine.
     # action says what I did: "picked" one of my labels, "approved" the suggestion, "edited"
-    # it before approving, or "rejected" it, which keeps the email under Unsorted. The last
-    # four columns are what undoing one change will need: whether the agent had added the
-    # old label, whether this change added the new one (not if the email already had it),
-    # whether it took the email out of the inbox, and whether it added the label itself to
-    # labels.json. ON DELETE CASCADE works as it does for full_reads above.
+    # it before approving, or "rejected" it, which keeps the email under Unsorted. The next
+    # four columns are what undoing one change needs: whether the agent had added the old
+    # label, whether this change added the new one (not if the email already had it), whether
+    # it took the email out of the inbox, and whether it added the label itself to labels.json.
+    # undone_at is when I undid the change. Like a line on a statement, it gets crossed out,
+    # not erased, so Step 8 can still see it. ON DELETE CASCADE works as it does for full_reads above.
     conn.execute("""
         CREATE TABLE IF NOT EXISTS label_changes (
             id INTEGER PRIMARY KEY,
@@ -115,13 +116,16 @@ def connect():
             old_label_added INTEGER,
             new_label_added INTEGER,
             left_inbox INTEGER,
-            label_created INTEGER DEFAULT 0
+            label_created INTEGER DEFAULT 0,
+            undone_at TEXT
         )
     """)
-    # label_created came after this table did. The same kind of migration as above.
+    # label_created and undone_at came after this table did. The same kind of migration as above.
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(label_changes)")}
     if "label_created" not in columns:
         conn.execute("ALTER TABLE label_changes ADD COLUMN label_created INTEGER DEFAULT 0")
+    if "undone_at" not in columns:
+        conn.execute("ALTER TABLE label_changes ADD COLUMN undone_at TEXT")
     # SQLite only enforces links between tables (like the one above) when this is
     # switched on, and only for this connection, so it's switched on every time.
     conn.execute("PRAGMA foreign_keys = ON")
@@ -293,7 +297,7 @@ _RUN_NUMBERS = f"""
            MIN(decisions.processed_at) AS started, COUNT(*) AS emails, SUM(decisions.archived) AS archived,
            SUM(decisions.archived = 0 AND {_NEEDS_ME}) AS flagged,
            SUM(decisions.label = 'Unsorted') AS unsorted,
-           SUM(EXISTS (SELECT 1 FROM label_changes AS c WHERE c.message_id = decisions.message_id)) AS changed_by_hand,
+           SUM(EXISTS (SELECT 1 FROM label_changes AS c WHERE c.message_id = decisions.message_id AND c.undone_at IS NULL)) AS changed_by_hand,
            COALESCE(SUM(decisions.cost), 0) + COALESCE(SUM(f.cost), 0) AS cost
     FROM decisions LEFT JOIN full_reads AS f ON f.message_id = decisions.message_id
     GROUP BY decisions.run_id ORDER BY started DESC
@@ -329,11 +333,13 @@ def run_started(conn, run_id):
 
 
 # Which emails wait for me to decide about their label: those that fit no label, which triage
-# labels "Unsorted" (UNSORTED in triage.py), unless I've said none is needed. Whether I have is
-# only kept in label_changes, not in a second place in decisions, so the two can't disagree.
+# labels "Unsorted" (UNSORTED in triage.py), unless I've said none is needed and haven't undone
+# that. Whether I have is only kept in label_changes, not in a second place in decisions, so the
+# two can't disagree.
 _WAITING_FOR_LABEL = """
     decisions.label = 'Unsorted' AND NOT EXISTS (
-        SELECT 1 FROM label_changes AS c WHERE c.message_id = decisions.message_id AND c.action = 'rejected'
+        SELECT 1 FROM label_changes AS c
+        WHERE c.message_id = decisions.message_id AND c.action = 'rejected' AND c.undone_at IS NULL
     )
 """
 
@@ -387,6 +393,46 @@ def save_label_change(conn, message_id, action, label, label_added, left_inbox, 
         (label, label_added, left_inbox, message_id),
     )
     conn.commit()
+
+
+# The changes I've made by hand and haven't undone, with which email each one is about.
+_MY_CHANGES = """
+    SELECT c.*, decisions.subject, decisions.sender, decisions.thread_id
+    FROM label_changes AS c JOIN decisions ON decisions.message_id = c.message_id
+    WHERE c.undone_at IS NULL
+"""
+
+
+def my_changes(conn):
+    """The changes I've made by hand and haven't undone, newest first. The ID settles changes in the same second."""
+    return conn.execute(f"{_MY_CHANGES} ORDER BY c.changed_at DESC, c.id DESC").fetchall()
+
+
+def my_change(conn, change_id):
+    """One change I've made by hand. None if I've undone it, or the log doesn't know it."""
+    return conn.execute(f"{_MY_CHANGES} AND c.id = ?", (change_id,)).fetchone()
+
+
+def save_undone_change(conn, change):
+    """Record that I undid a change: the email gets its old label back, and the change's row gets crossed out.
+
+    A change that took the email out of the inbox found it there, so the email is back to not
+    being archived. One commit saves both, so a crash can't save only one.
+    """
+    conn.execute(
+        "UPDATE label_changes SET undone_at = ? WHERE id = ?",
+        (datetime.now().isoformat(timespec="seconds"), change["id"]),
+    )
+    conn.execute(
+        "UPDATE decisions SET label = ?, label_added = ?, archived = archived AND NOT ? WHERE message_id = ?",
+        (change["old_label"], change["old_label_added"], change["left_inbox"], change["message_id"]),
+    )
+    conn.commit()
+
+
+def emails_with_label(conn, label):
+    """How many emails in the log have this label now."""
+    return conn.execute("SELECT COUNT(*) FROM decisions WHERE label = ?", (label,)).fetchone()[0]
 
 
 def sorting_costs(conn, since):

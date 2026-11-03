@@ -6,7 +6,7 @@ fills in. There are three pages, Action needed, Unsorted and History, which shar
 one layout with the menu and the "Sort new emails" button (web/templates/base.html).
 Action needed lists my to-dos, and Unsorted the emails that fit no label, where I decide
 what happens to each one's suggested label. History shows what each sorting run did,
-and finds any email the agent has sorted.
+finds any email the agent has sorted, and undoes my own changes.
 
 Start it from the project folder with:
   python -m uvicorn web.app:app --reload
@@ -156,11 +156,23 @@ def show_deadline(deadline):
     return f"Due {show_date(deadline)}"
 
 
+def what_i_did(change):
+    """One of my changes from the log, in a sentence for its row on the History page."""
+    if change["action"] == "rejected":
+        text = "Rejected: no label needed"
+    elif change["label_created"]:
+        text = f"Added the new label {change['new_label']} and moved this email there"
+    else:
+        text = f"Moved from {change['old_label']} to {change['new_label']}"
+    return f"{text}, and it left your inbox." if change["left_inbox"] else f"{text}."
+
+
 # Lets the templates use these as "filters": {{ todo.received|show_date }}
 templates.env.filters["show_date"] = show_date
 templates.env.filters["show_logged_date"] = show_logged_date
 templates.env.filters["show_logged_moment"] = show_logged_moment
 templates.env.filters["show_deadline"] = show_deadline
+templates.env.filters["what_i_did"] = what_i_did
 templates.env.filters["clean"] = labelling.clean
 
 
@@ -354,7 +366,7 @@ def change_row(request, message_id, change):
         return row_problem(request, message_id, f"Couldn't finish: {sorting.explain(error)}")
     if changed and changed.label_created:
         # Every row's dropdown needs the new label, so the page reloads, and says once what happened.
-        _waiting["message"] = {"ok": True, "text": f"{changed.subject}: {what_happened(changed)}"}
+        _waiting["message"] = {"ok": True, "text": f"{changed.subject}: {what_happened(changed)} You can undo this on the History page."}
         return Response(headers={"HX-Refresh": "true"})
     with closing(database.connect()) as conn:
         total = database.unsorted_count(conn)
@@ -365,30 +377,89 @@ def change_row(request, message_id, change):
     )
 
 
-def row_problem(request, message_id, problem):
-    """Show what went wrong inside a row of the Unsorted page, leaving the rest of the row as it is.
+def row_problem(request, row_id, problem):
+    """Show what went wrong inside a row, leaving the rest of the row as it is.
 
     HX-Reswap: none tells HTMX not to replace the row with this answer. It only puts the
     problem in its place in the row ("out of band"), so the label I chose stays selected.
     """
     return templates.TemplateResponse(
         request=request,
-        name="_unsorted_problem.html",
-        context={"message_id": message_id, "problem": problem},
+        name="_row_problem.html",
+        context={"row_id": row_id, "problem": problem},
         headers={"HX-Reswap": "none"},
     )
 
 
 @app.get("/history")
 def history(request: Request):
-    """History: what each sorting run did, newest first. It all comes from the log, so Gmail doesn't get asked."""
+    """History: what each sorting run did, newest first, and my own changes, each with a way to undo it.
+
+    The numbers all come from the log. Gmail still gets asked, as on the other pages, because
+    Undo needs it, so the page has to say when it needs me to sign in.
+    """
+    _, gmail_problem = check_inbox()
     with closing(database.connect()) as conn:
         runs = database.run_summaries(conn)
         label_counts = database.run_label_counts(conn)
+        changes = database.my_changes(conn)
     return templates.TemplateResponse(
         request=request,
         name="history.html",
-        context={"active": "history", "runs": runs, "label_counts": label_counts, "max_search": MAX_SEARCH},
+        context={
+            "active": "history",
+            "runs": runs,
+            "label_counts": label_counts,
+            "changes": changes,
+            "total": len(changes),  # for the count beside the heading, as in the answer to a click
+            "max_search": MAX_SEARCH,
+            # For the "Open in Gmail" links, the same as on Action needed
+            "gmail_address": saved_account(),
+            "gmail_problem": gmail_problem,  # None, or why Gmail couldn't be checked
+        },
+    )
+
+
+def what_undo_did(undone):
+    """What undoing a change did to an email, in a sentence or two for its row."""
+    if undone.email_gone:
+        text = "Undone, but this email isn't in Gmail any more, so only the log changed."
+    elif undone.back_in_inbox:
+        text = "Undone: it's back on the Unsorted page, and back in your inbox."
+    else:
+        text = "Undone: it's back on the Unsorted page."
+    label = undone.created_label
+    if label is None:
+        return text
+    if undone.others_with_label:
+        others = "1 other email has" if undone.others_with_label == 1 else f"{undone.others_with_label} other emails have"
+        return f"{text} {label} stays one of your labels, because {others} it."
+    if undone.label_stuck:
+        return f"{text} {label} is still one of your labels, because labels.json couldn't be changed."
+    return f"{text} {label} is no longer one of your labels. It stays in Gmail, empty, and you can delete it there."
+
+
+@app.post("/history/changes/{change_id}/undo")
+def undo_my_change(request: Request, change_id: int):
+    """Undo one of my changes, and show how it went in its row."""
+    row_id = f"change-{change_id}"
+    try:
+        with sorting.no_sorting_meanwhile():
+            undone = labelling.undo_change(change_id)
+    except sorting.SortingNowError:
+        return row_problem(request, row_id, "Not undone: sorting is going. Try again when it's finished.")
+    except SignInNeededError:
+        # A row has no room for the sign-in button, so the page reloads and shows its notice.
+        return Response(headers={"HX-Refresh": "true"})
+    except Exception as error:
+        log.exception("Couldn't finish undoing a change")
+        return row_problem(request, row_id, f"Couldn't finish: {sorting.explain(error)}")
+    with closing(database.connect()) as conn:
+        total = len(database.my_changes(conn))
+    return templates.TemplateResponse(
+        request=request,
+        name="_change_undone.html",
+        context={"undone": undone, "what_undo_did": what_undo_did(undone) if undone else None, "total": total},
     )
 
 

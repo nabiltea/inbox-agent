@@ -1,5 +1,5 @@
-{# The History page: a way to find any email, and what each sorting run did, newest first. It fills
-   the slots in base.html, which draws the rest. #}
+{# The History page: a way to find any email, what each sorting run did, newest first, and my own
+   changes, each with an Undo. It fills the slots in base.html, which draws the rest. #}
 {% extends "base.html" %}
 {% from "_macros.html" import tag %}
 
@@ -12,7 +12,11 @@
   <h1 class="text-2xl font-semibold">History</h1>
 
   {% include "_email_search.html" %}
-  <p class="mt-2 text-sm"><a href="{{ list_address }}" class="{{ link_style }}">See all emails<span aria-hidden="true"> →</span></a></p>
+  <p class="mt-2 flex flex-wrap gap-x-6 gap-y-1 text-sm">
+    <a href="{{ list_address }}" class="{{ link_style }}">See all emails<span aria-hidden="true"> →</span></a>
+    {# Jumps down this page, past the runs, which get more numerous with every sort #}
+    <a href="#your-changes" class="{{ link_style }}">Your changes<span aria-hidden="true"> ↓</span></a>
+  </p>
 
   <h2 class="mt-6 font-medium">Runs</h2>
   {% if runs %}
@@ -58,6 +62,24 @@
   {% else %}
     <div class="mt-2 rounded-lg bg-white p-6 shadow-sm">
       <p class="text-gray-600">No sorting runs yet.</p>
+    </div>
+  {% endif %}
+
+  {# scroll-mt keeps the heading out from under the sticky top bar when a link jumps here. That bar
+     is 135 pixels tall at phone width, where it takes three lines. #}
+  <h2 id="your-changes" class="mt-6 flex scroll-mt-40 items-baseline gap-2 font-medium">
+    Your changes
+    {% include "_changes_count.html" %}
+  </h2>
+  {% if changes %}
+    <ul class="mt-2 divide-y divide-gray-200 rounded-lg bg-white shadow-sm">
+      {% for change in changes %}
+        {% include "_change_row.html" %}
+      {% endfor %}
+    </ul>
+  {% else %}
+    <div class="mt-2 rounded-lg bg-white p-6 shadow-sm">
+      <p class="text-gray-600">Nothing yet. What you do on the Unsorted page shows up here, with a way to undo it.</p>
     </div>
   {% endif %}
 {% endblock %}

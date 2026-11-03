@@ -1,10 +1,11 @@
-"""Changing an email's label by hand, behind the buttons on the Unsorted page.
+"""Changing an email's label by hand, behind the buttons on the Unsorted page, and undoing that from the History page.
 
 A change goes in the same order as sorting (apply_sorted() in triage.py): first Gmail,
 then the log. It only takes a few quick requests to Gmail, so unlike the Sort button,
 the click simply waits for the answer.
 """
 
+import logging
 import threading
 from contextlib import closing
 from dataclasses import dataclass
@@ -19,8 +20,11 @@ from gmail_client import (
     explain_failures,
     get_gmail_service,
     get_or_create_labels,
+    list_labels,
 )
-from triage import ARCHIVE_SORTED_EMAILS, UNSORTED, add_label, load_labels
+from triage import ARCHIVE_SORTED_EMAILS, UNSORTED, add_label, load_labels, remove_label
+
+log = logging.getLogger("uvicorn.error")
 
 # How long a new label's name and description can be. My longest description is 643
 # characters, so this leaves room to write one by hand. Claude's suggestions are far shorter.
@@ -47,6 +51,18 @@ class Changed:
     left_inbox: bool
     still_needs_me: bool  # it needs me and it's in my inbox, which is why it stays there
     label_created: bool = False  # this click added the label to labels.json
+
+
+@dataclass
+class Undone:
+    """What undoing a change did, for its row on the page."""
+
+    subject: str
+    back_in_inbox: bool
+    email_gone: bool  # it isn't in Gmail any more, so only the log changed
+    created_label: str | None = None  # the label the undone click added to labels.json, if it did
+    others_with_label: int = 0  # how many other emails have that label, which is why it stays
+    label_stuck: bool = False  # labels.json couldn't be changed, so the label is still there
 
 
 def clean(text):
@@ -175,3 +191,63 @@ def reject_suggestion(message_id):
             labels_now, left_inbox = [], False
         database.save_label_change(conn, message_id, "rejected", UNSORTED, email["label_added"], left_inbox)
     return Changed(email["subject"], None, left_inbox, "INBOX" in labels_now and bool(email["needs_me"]))
+
+
+def _put_back_in_gmail(service, change):
+    """Reverse a change in Gmail. Repeating this is harmless, so if it fails partway, the same click finishes it."""
+    add, remove = [], []
+    if change["new_label"] != change["old_label"]:  # rejecting keeps the label, so then there's none to swap
+        label_ids = {label["name"]: label["id"] for label in list_labels(service)}
+        # The old label goes back on, and gets made again if I've deleted it in Gmail since.
+        add.append(label_ids.get(change["old_label"]) or get_or_create_labels(service, [change["old_label"]])[change["old_label"]])
+        # The new label only comes off if this change added it, and if it's still in Gmail.
+        if change["new_label_added"] and change["new_label"] in label_ids:
+            remove.append(label_ids[change["new_label"]])
+    if change["left_inbox"]:
+        add.append("INBOX")
+    if add or remove:
+        change_labels(service, change["message_id"], add=add, remove=remove)
+
+
+def _forget_new_label(conn, label, undone):
+    """After undoing the click that made a label: take it out of labels.json, unless another email in the log has it.
+
+    Otherwise a label approved by mistake would stay in Claude's instructions for every future
+    email. It stays in Gmail, empty, because deleting a label there can't be undone, and it may
+    be an old one of mine, on emails the log knows nothing about. By now the email is undone in
+    Gmail and the log, so a problem with the file only gets mentioned.
+    """
+    undone.created_label = label
+    undone.others_with_label = database.emails_with_label(conn, label)
+    if undone.others_with_label:
+        return
+    try:
+        remove_label(label)
+    except (OSError, ValueError, KeyError):
+        log.exception("Couldn't take a label out of labels.json")
+        undone.label_stuck = True
+
+
+def undo_change(change_id):
+    """Undo one of my changes: the email goes back to how it was, first in Gmail, then in the log.
+
+    An email that isn't in Gmail any more has nothing to change there, so only the log changes.
+
+    Returns what happened, or None if there's nothing to undo any more, for example after a second click.
+    """
+    with _one_at_a_time, closing(database.connect()) as conn:
+        change = database.my_change(conn, change_id)
+        if change is None:
+            return None
+        service = get_gmail_service(allow_browser_sign_in=False)
+        email_gone = False
+        try:
+            with explain_failures():
+                _put_back_in_gmail(service, change)
+        except EmailGoneError:
+            email_gone = True
+        database.save_undone_change(conn, change)
+        undone = Undone(change["subject"], bool(change["left_inbox"]) and not email_gone, email_gone)
+        if change["label_created"]:
+            _forget_new_label(conn, change["new_label"], undone)
+    return undone

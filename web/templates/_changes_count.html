@@ -1,0 +1,5 @@
+{# How many of my changes can be undone, beside the heading on the History page. oob ("out of band"):
+   when the answer to a click also carries this, HTMX puts it here, as on the Unsorted page. #}
+<span id="changes-count" class="text-sm font-normal text-gray-600"{% if oob %} hx-swap-oob="true"{% endif %}>
+  {% if total %}{{ total }}{% endif %}
+</span>

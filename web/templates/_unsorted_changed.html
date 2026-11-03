@@ -4,6 +4,7 @@
   {% if changed %}
     <p class="font-medium text-gray-900">{{ changed.subject }}</p>
     <p class="mt-0.5">{{ what_happened }}</p>
+    <p class="mt-0.5"><a href="{{ url_for('history').path }}#your-changes" class="text-blue-600 hover:underline">Undo this on the History page</a></p>
   {% else %}
     <p>This email isn't waiting for a label any more.</p>
   {% endif %}

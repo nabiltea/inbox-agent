@@ -1004,6 +1004,15 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - A Why fold on each row gives Claude's reason, the full read's if there is one, and when the email was sorted.
   - On the History page: the search box (`_email_search.html`), "See all emails", a link from each card to its emails, and a link from each label count to exactly those emails.
   - **Smaller choices:** the search goes in the address, so Back and reloading work. Searching inside a run or label keeps that filter, and "Show all emails" clears it. A search counts up to 100 characters. An old link asking for a page that no longer exists gets the last page.
+- **Built, part 3: my changes, and undoing one:**
+  - `undone_at` on `label_changes`, added to older logs by a migration. `my_changes()` in `database.py` lists the changes that stand, newest first. `_WAITING_FOR_LABEL` and the run numbers now ignore undone ones, which is what brings an undone reject back onto the Unsorted page.
+  - `undo_change()` in `web/labelling.py`, in the same order as every other change: first Gmail, then the log. `_put_back_in_gmail()` takes the new label off if the click added it, puts the old one back, and returns the email to the inbox if the click took it out. A rejected email kept its label, so only the inbox can change. `save_undone_change()` writes the old label back and crosses out the row with one commit.
+  - Repeating a label change is harmless ("idempotent"), so if Gmail or the log fails partway, the same click finishes the job.
+  - `_forget_new_label()` and `remove_label()` in `triage.py`: undoing the click that made a label takes it out of `labels.json` if no other email in the log has it, with the same safe save as adding one. The file comes back byte-for-byte as it was. The label stays in Gmail, empty, and the row says so, or says how many other emails keep it there.
+  - `no_sorting_meanwhile()` in `web/sorting.py`: Undo is refused while a sort is going, and a press of Sort during an undo waits for it, so a label can't vanish in the middle of a run.
+  - **On the page:** a "Your changes" section on History with a count, rejected emails included, and a link at the top that jumps to it. Each row gives the email, what I did and when, an Undo button and Open in Gmail. The row Unsorted leaves behind links here. The answer replaces only that row, as on the Unsorted page.
+  - **History now asks Gmail once per page load,** like the other pages. Undo needs Gmail, so the page has to say when I need to sign in. Without that, a click after the login ended would reload the page with no explanation.
+  - **Smaller choices:** Undo takes one click with no "are you sure?", because I can make the change again. "Your changes" sits below the runs, as sketched in the plan, and the link at the top is there because the runs will get more numerous. A problem shows in the row, like on the Unsorted page, so `_unsorted_problem.html` became `_row_problem.html`.
 - **Learned:**
   - A test that can't fail proves nothing. I broke the page's SQL on purpose in two ways, and the tests failed 14 and 54 times ("mutation testing").
   - A test's expected numbers should come from somewhere other than the code it's testing. Mine add up each run one row at a time in Python, rather than reuse the page's SQL.
@@ -1011,6 +1020,8 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - Breaking code on purpose also finds weak tests. Removing a rule from the To-do tag still passed all 476 tests of part 2, because I'd made up the right email but never checked it. Now that break fails too.
   - "Newest first" isn't a complete order. 67 emails share their exact date with another, and without something to settle ties, an email could jump between pages. The message ID settles them, and removing it makes 3 tests fail.
   - When moving code shouldn't change anything, the strongest check is to run both versions side by side: the committed app and the new one, on the same data, on two ports, compared page by page.
+  - Made-up test data can hide a bug by being too tidy. Every made-up email started with "the agent added this label", so a break that stopped undo restoring that note passed all the tests. The real risk was a later whole-run undo leaving the wrong label on, so I added an email where the note starts as no.
+  - A screenshot can catch a page mid-update. One showed an error in the wrong colour and size, while the browser's own numbers said it was right, and a second screenshot agreed with them.
 - **Result:**
   - **Part 1, 151 free tests, on copies of my real log:**
     - **The numbers:** every number on each card matches what the rows say, worked out separately: 3 runs of 99, 2,836 and 3,653, newest first, costing $0.05, $0.66 and $0.86, and each run's label counts add up to its emails.
@@ -1029,10 +1040,23 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
     - **Breaking the code on purpose:** 10 different breaks in the order, the search, the filters and the To-do tag each make tests fail.
     - **The rest:** looking and searching change nothing in the log, and a page takes about 18 milliseconds, or 55 with a search. My real log, `labels.json` and `token.json` stayed byte-for-byte the same.
   - **Part 2, in a real browser, with made-up emails:** a search typed with a real keyboard found "Réunion à Paris" from "paris REUNION", and a search inside a run and a label kept both. Older and the label links work. The page is no wider than a phone, even with a very long word in a subject, nothing loads from outside, and the console shows no errors. Looking at it found one problem no test had: at phone width, an open Why fold was squeezed beside "Open in Gmail". An open fold now takes the whole line there.
+  - **Part 3, 219 free tests, on copies of my real log and `labels.json`, with a stand-in for Gmail's API:**
+    - **Undoing a move:** Gmail and the log go back exactly as they were, down to every column of the email's row. An old email stays archived, a new one returns to the inbox, one that needs me stays a to-do, and a label the email already had stays on.
+    - **Undoing a reject:** the email comes back onto the Unsorted page with Unsorted still on, and an old one needs no request to Gmail at all.
+    - **Undoing a new label:** `labels.json` comes back byte-for-byte, Claude's next run doesn't know the label, and it stays in Gmail, empty. Approving again reuses it. With other emails under the label, including from a later run, it stays, and the row says how many.
+    - **Failures:** Gmail's 2 requests each failed in 8 different ways, with nothing recorded, and the same click worked afterwards. If the log can't be written after Gmail has changed, the same click finishes the job. An ended login reloads the page, which now shows the sign-in button. An email deleted from Gmail gets undone in the log, and says so. A broken `labels.json` doesn't stop the undo, and the row says the label is still there.
+    - **Clicks:** 8 at the same moment gave one undo, and a click from an old page changes nothing. 6 kinds of forged click were refused. Undo waits for a sort, and a press of Sort during an undo waits for it, with no deadlock. An email can be moved, undone and moved again, and the log keeps both rows.
+    - **The rest:** text trying to be code stays plain text. An older log gets the new column and keeps its rows. 40 saves of `labels.json` while 4 threads kept reading gave no errors. The real `undo.py` reverses a run with undone changes in it, and forgets them with its emails.
+    - **Breaking the code on purpose:** 17 different breaks each make tests fail, after I added checks for the one that didn't at first (see Learned).
+    - My real log's rows and `labels.json` stayed the same. Tests for parts 1 and 2 still pass, after updating them for the new links and for History asking Gmail.
+  - **Part 3, in a real browser, with made-up emails and a stand-in for Gmail:** Undo with a real click replaced the row and updated the count with no reload. When the stand-in failed on purpose, the problem showed in the row, and the same click then worked. Undoing a new label took it out of the Unsorted page's dropdown, and the link from an Unsorted row lands on the list. It fits at phone width with no console errors. Measuring found a gap: at phone width the top bar is 135 pixels tall, more than the 80 I'd left for the jump link, so the heading could have hidden under it. It has 160 now.
 - **Found:**
   - **The refusal at email 37 isn't explained by the per-minute allowance.** Fetching one email costs 20 units, so 45 emails is only 900 of 6,000. Google also describes a limit on requests at the same moment, which batches can trigger. That may be the cause, and then waiting a full minute would be longer than needed. It's on the list below.
   - **The log and `labels.json` haven't changed since their backups in `backups/`.** The real checks get a fresh backup anyway, because the log will have changed by then.
   - **What the search can't find:** it only sees what the log keeps, the subject and the sender's name, so an email address or a word inside an email won't match. A straight apostrophe doesn't find a curly one either, so "don't" misses "don’t". Gmail's own search is there for those.
+  - **After an Undo, the run's card above is out of date until the page is next loaded,** because the answer only replaces the row. The numbers on the card are right after a reload.
+  - **A label can outlive the emails that used it.** Only undoing the click that made a label removes it, so if I undo that click while another email has the label, then undo the other email, the label stays in `labels.json`. The same goes if Approve fails after saving the label, because the click that finishes the job no longer counts as the one that made it. It's harmless, and I can take it out of the file by hand.
+  - **Undoing an edited label loses my wording.** The Unsorted row shows Claude's suggestion again, because the log doesn't keep what I typed.
 
 ## What's left
 
@@ -1087,7 +1111,7 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 - [ ] **Step 7, piece 5:** the History page, in six parts:
   - [x] part 1: past runs, with how many emails have each label
   - [x] part 2: find an email: a list of all emails with a search, and Claude's reason for each
-  - [ ] part 3: my changes, including rejected emails, and undoing one of them
+  - [x] part 3: my changes, including rejected emails, and undoing one of them
   - [ ] part 4: change the label of any email
   - [ ] part 5: the "Needs action" button, and undoing it
   - [ ] part 6: undoing a whole run from the page, sharing `undo.py`'s logic
@@ -1132,7 +1156,7 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 | `check_mcp_server.py` | Starts the MCP server the way an app would, lists its tools and tries the read-only ones |
 | `drafter.py` | The Drafter agent and the Critic: writes a reply to one conversation, reviews it, and saves it as a Gmail draft with `--save` |
 | `style_builder.py` | Builds my writing-style file: `collect` gathers my sent emails, `write` has Claude Opus describe my style |
-| `web/` | Step 7: the web page. `app.py` is the FastAPI app, with one function per page. `templates/` holds the HTML templates: `base.html` is the shared layout with the menu, and each page fills it in. `csrf.py` stops other websites pressing the app's buttons, `sorting.py` runs the "Sort new emails" button's work on a second thread, and `labelling.py` changes an email's label behind the Unsorted page's buttons. `tailwind.css` tells Tailwind's program what to build, and `static/` holds files sent to the browser as they are: the built CSS, the Inter font and HTMX |
+| `web/` | Step 7: the web page. `app.py` is the FastAPI app, with one function per page. `templates/` holds the HTML templates: `base.html` is the shared layout with the menu, and each page fills it in. `csrf.py` stops other websites pressing the app's buttons, `sorting.py` runs the "Sort new emails" button's work on a second thread, and `labelling.py` changes an email's label behind the Unsorted page's buttons, and undoes that from the History page. `tailwind.css` tells Tailwind's program what to build, and `static/` holds files sent to the browser as they are: the built CSS, the Inter font and HTMX |
 | `profile.example/` | Example versions of my profile files. The real ones are in `profile/`, which isn't in Git |
 | `requirements.txt` | Python packages, with exact versions |
 | `.env.example` | Template for the API key file |

@@ -82,23 +82,38 @@ def load_labels():
     return {label["name"]: label["description"] for label in data["labels"]}
 
 
-def add_label(name, description):
-    """Add a label to labels.json, in a way that a crash can't leave half a file.
+def _save_labels_file(data):
+    """Save labels.json in a way that a crash can't leave half a file.
 
     The new version goes to a temporary file first, and one move then swaps it in (an
     "atomic write"). This matters because labels.json isn't in Git, so a broken one couldn't
     be restored from there. fsync makes sure the new version has really reached the disk
     before it replaces the old one.
     """
+    temporary = LABELS_FILE.with_name(f"{LABELS_FILE.name}.tmp")
+    with open(temporary, "w", encoding="utf-8") as file:
+        file.write(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+        file.flush()
+        os.fsync(file.fileno())
+    os.replace(temporary, LABELS_FILE)
+
+
+def add_label(name, description):
+    """Add a label to labels.json."""
     with _labels_file_in_use:
         data = _read_labels_file()
         data["labels"].append({"name": name, "description": description})
-        temporary = LABELS_FILE.with_name(f"{LABELS_FILE.name}.tmp")
-        with open(temporary, "w", encoding="utf-8") as file:
-            file.write(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
-            file.flush()
-            os.fsync(file.fileno())
-        os.replace(temporary, LABELS_FILE)
+        _save_labels_file(data)
+
+
+def remove_label(name):
+    """Take a label out of labels.json, so the next run doesn't offer it to Claude. A name it doesn't have changes nothing."""
+    with _labels_file_in_use:
+        data = _read_labels_file()
+        remaining = [label for label in data["labels"] if label["name"] != name]
+        if len(remaining) < len(data["labels"]):
+            data["labels"] = remaining
+            _save_labels_file(data)
 
 
 # Used when no label fits. These emails come with a suggested new label for me to approve.

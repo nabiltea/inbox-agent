@@ -1,0 +1,11 @@
+{# What a row of my changes turns into after Undo, until the page is next loaded. The answer also
+   carries the count beside the heading, so that gets updated too ("out of band"). #}
+<li class="px-5 py-3 text-sm text-gray-600" role="status">
+  {% if undone %}
+    <p class="font-medium wrap-break-word text-gray-900">{{ undone.subject }}</p>
+    <p class="mt-0.5 wrap-break-word">{{ what_undo_did }}</p>
+  {% else %}
+    <p>This change has already been undone.</p>
+  {% endif %}
+</li>
+{% with oob = true %}{% include "_changes_count.html" %}{% endwith %}
