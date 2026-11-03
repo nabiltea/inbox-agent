@@ -1,7 +1,9 @@
-{# One email in the list on the History page: what it is, where it is now, and Claude's reason. A row is
-   a template of its own, so the buttons coming next can replace one row by itself. Everything here
-   is escaped, as on every page (see app.py). #}
+{# One email in the list on the History page: what it is, where it is now, what I've changed, and folds
+   to change its label and see Claude's reason. A row is a template of its own, so a click can replace
+   one row by itself. Everything here is escaped, as on every page (see app.py). #}
 {% from "_macros.html" import open_in_gmail, tag %}
+{% set button_style = "rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-800 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50" %}
+{% if email %}
 <li class="px-5 py-3">
   <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
     <p class="min-w-0 font-medium wrap-break-word">{{ email.subject }}</p>
@@ -11,10 +13,40 @@
   <p class="mt-0.5 text-sm wrap-break-word text-gray-500">
     {{ email.sender }} · {{ email.received_at|show_logged_date }} · {{ email.label }} · {{ "In your inbox" if in_inbox else "Archived" }}
   </p>
-  <div class="mt-1 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-    {# <details> is a fold the browser handles by itself, as on the other pages. On a phone, an open
-       fold takes the whole line (the last class), or its text gets squeezed beside the link. #}
-    <details class="min-w-0 flex-1 text-sm max-sm:open:basis-full">
+  {# What a click just did #}
+  {% if message %}<p class="mt-1 text-sm wrap-break-word text-gray-700" role="status">{{ message }}</p>{% endif %}
+  {# My newest change to this email, and the way back. hx-post sends the click to the server, and
+     hx-target says the answer replaces this whole row. hx-disabled-elt greys out the button straight
+     away, so a double click can't send two requests. #}
+  {% if change %}
+    <div class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+      <p class="text-sm wrap-break-word text-gray-700">{{ change|what_i_did }}</p>
+      <button type="button" hx-post="{{ url_for('undo_change_in_list', message_id=email.message_id, change_id=change.id).path }}" hx-target="closest li" hx-swap="outerHTML" hx-disabled-elt="this"
+              class="{{ button_style }}">
+        Undo
+      </button>
+    </div>
+  {% endif %}
+  <div class="mt-1 flex flex-wrap items-baseline gap-x-4 gap-y-1 text-sm">
+    {# <details> is a fold the browser handles by itself, as on the other pages. An open fold takes a
+       whole line (the last class), so what's inside has room. Without labels.json there's nothing to choose from. #}
+    {% if labels %}
+      <details class="min-w-0 open:basis-full">
+        <summary class="cursor-pointer text-gray-600 hover:text-gray-900">Change label</summary>
+        {# required makes the browser refuse to send the form until a label is chosen #}
+        <form hx-post="{{ url_for('change_email_label', message_id=email.message_id).path }}" hx-target="closest li" hx-swap="outerHTML" hx-disabled-elt="find button"
+              class="mt-1 flex flex-wrap items-center gap-2">
+          <select name="label" required aria-label="The label this email should have" class="rounded-md border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900">
+            <option value="">Choose a label…</option>
+            {% for choice in labels if choice != email.label %}
+              <option value="{{ choice }}">{{ choice }}</option>
+            {% endfor %}
+          </select>
+          <button type="submit" class="{{ button_style }}">Move</button>
+        </form>
+      </details>
+    {% endif %}
+    <details class="min-w-0 open:basis-full">
       <summary class="cursor-pointer text-gray-600 hover:text-gray-900">Why</summary>
       {% if email.reason %}<p class="mt-1 text-gray-600">{{ email.reason }}</p>{% endif %}
       {% if email.full_read_reason %}<p class="mt-1 text-gray-600">Full read: {{ email.full_read_reason }}</p>{% endif %}
@@ -25,4 +57,9 @@
       <div class="ml-auto">{{ open_in_gmail(email.thread_id, gmail_address) }}</div>
     {% endif %}
   </div>
+  {# Where _row_problem.html goes if a click doesn't work. Empty, it takes up no room. #}
+  <p id="problem-{{ email.message_id }}" class="empty:hidden"></p>
 </li>
+{% else %}
+<li class="px-5 py-3 text-sm text-gray-600" role="status">This email isn't in the log any more.</li>
+{% endif %}

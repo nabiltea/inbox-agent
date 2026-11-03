@@ -230,23 +230,30 @@ def _matching(search, run_id, label):
     return " AND ".join(conditions), values
 
 
-def find_emails(conn, search="", run_id="", label="", limit=50, offset=0):
-    """One page of the emails a search and filters find, newest first, with whether each one is flagged and why.
+# The emails in the list on the History page, each with whether it needs me, whether it's
+# flagged (the same rule as flagged_emails()) and why the full read said what it did.
+_LISTED_EMAILS = f"""
+    SELECT decisions.*, {_NEEDS_ME} AS needs_me, decisions.archived = 0 AND {_NEEDS_ME} AS flagged, f.reason AS full_read_reason
+    FROM decisions LEFT JOIN full_reads AS f ON f.message_id = decisions.message_id
+"""
 
-    flagged follows the same rule as flagged_emails(). The message ID settles the order of emails
-    with the same date, of which the log has dozens: without it, one could jump between pages.
+
+def find_emails(conn, search="", run_id="", label="", limit=50, offset=0):
+    """One page of the emails a search and filters find, newest first.
+
+    The message ID settles the order of emails with the same date, of which the log has
+    dozens: without it, one could jump between pages.
     """
     where, values = _matching(search, run_id, label)
     return conn.execute(
-        f"""
-        SELECT decisions.*, decisions.archived = 0 AND {_NEEDS_ME} AS flagged, f.reason AS full_read_reason
-        FROM decisions LEFT JOIN full_reads AS f ON f.message_id = decisions.message_id
-        WHERE {where}
-        ORDER BY decisions.received_at DESC, decisions.message_id
-        LIMIT ? OFFSET ?
-        """,
+        f"{_LISTED_EMAILS} WHERE {where} ORDER BY decisions.received_at DESC, decisions.message_id LIMIT ? OFFSET ?",
         (*values, limit, offset),
     ).fetchall()
+
+
+def listed_email(conn, message_id):
+    """One email from the log, as in the list. None if the log doesn't know it, for example because its run has been undone."""
+    return conn.execute(f"{_LISTED_EMAILS} WHERE decisions.message_id = ?", (message_id,)).fetchone()
 
 
 def count_emails(conn, search="", run_id="", label=""):
@@ -395,9 +402,12 @@ def save_label_change(conn, message_id, action, label, label_added, left_inbox, 
     conn.commit()
 
 
-# The changes I've made by hand and haven't undone, with which email each one is about.
+# The changes I've made by hand and haven't undone, with which email each one is about. An
+# email can change more than once, so newest says whether this is its latest change. Only that
+# one can be undone: an older one would bring back a label from before the newer change.
 _MY_CHANGES = """
-    SELECT c.*, decisions.subject, decisions.sender, decisions.thread_id
+    SELECT c.*, decisions.subject, decisions.sender, decisions.thread_id,
+           c.id = (SELECT MAX(n.id) FROM label_changes AS n WHERE n.message_id = c.message_id AND n.undone_at IS NULL) AS newest
     FROM label_changes AS c JOIN decisions ON decisions.message_id = c.message_id
     WHERE c.undone_at IS NULL
 """
@@ -411,6 +421,13 @@ def my_changes(conn):
 def my_change(conn, change_id):
     """One change I've made by hand. None if I've undone it, or the log doesn't know it."""
     return conn.execute(f"{_MY_CHANGES} AND c.id = ?", (change_id,)).fetchone()
+
+
+def newest_changes(conn, message_ids):
+    """For some emails in the list: {message ID: its newest change I haven't undone}, for those that have one."""
+    marks = ", ".join("?" * len(message_ids))  # one ? per email, so the IDs still go in as values, never as SQL
+    rows = conn.execute(f"{_MY_CHANGES} AND c.message_id IN ({marks}) ORDER BY c.id", message_ids).fetchall()
+    return {row["message_id"]: row for row in rows}  # a later row replaces an earlier one, so the newest stays
 
 
 def save_undone_change(conn, change):

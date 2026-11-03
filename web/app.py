@@ -348,22 +348,39 @@ def what_happened(changed):
     return f"{text}."
 
 
-def change_row(request, message_id, change):
-    """Carry out a button's change to one email, and answer with what its row should say."""
+def attempt(request, row_id, change):
+    """Carry out a button's change to one email, on any page.
+
+    Returns what happened and no answer, or, if it went wrong, nothing and the answer that says so.
+    """
     try:
-        changed = change()
+        return change(), None
     except SignInNeededError:
         # A row has no room for the sign-in button, so the page reloads and shows its notice.
-        return Response(headers={"HX-Refresh": "true"})
+        return None, Response(headers={"HX-Refresh": "true"})
     except labelling.NoSuchLabelError:
-        return row_problem(request, message_id, "Not moved: choose a label from the list.")
+        problem = "Not moved: choose a label from the list."
+    except labelling.SameLabelError:
+        problem = "Not moved: it already has that label."
     except EmailGoneError as error:
-        return row_problem(request, message_id, f"Not moved: {error}")
+        problem = f"Not moved: {error}"
     except (labelling.BadLabelError, LabelRefusedError) as error:
-        return row_problem(request, message_id, f"Not saved: {error}")
+        problem = f"Not saved: {error}"
+    except sorting.SortingNowError:
+        problem = "Not undone: sorting is going. Try again when it's finished."
+    except labelling.NotNewestChangeError:
+        problem = "Not undone: a newer change to this email has to be undone first."
     except Exception as error:
         log.exception("Couldn't finish changing an email")
-        return row_problem(request, message_id, f"Couldn't finish: {sorting.explain(error)}")
+        problem = f"Couldn't finish: {sorting.explain(error)}"
+    return None, row_problem(request, row_id, problem)
+
+
+def change_row(request, message_id, change):
+    """Carry out a button's change to one email on the Unsorted page, and answer with what its row should say."""
+    changed, problem = attempt(request, message_id, change)
+    if problem:
+        return problem
     if changed and changed.label_created:
         # Every row's dropdown needs the new label, so the page reloads, and says once what happened.
         _waiting["message"] = {"ok": True, "text": f"{changed.subject}: {what_happened(changed)} You can undo this on the History page."}
@@ -422,12 +439,13 @@ def history(request: Request):
 
 def what_undo_did(undone):
     """What undoing a change did to an email, in a sentence or two for its row."""
+    where = "on the Unsorted page" if undone.waiting_for_label else f"under {undone.old_label}"
     if undone.email_gone:
         text = "Undone, but this email isn't in Gmail any more, so only the log changed."
     elif undone.back_in_inbox:
-        text = "Undone: it's back on the Unsorted page, and back in your inbox."
+        text = f"Undone: it's back {where}, and back in your inbox."
     else:
-        text = "Undone: it's back on the Unsorted page."
+        text = f"Undone: it's back {where}."
     label = undone.created_label
     if label is None:
         return text
@@ -439,21 +457,18 @@ def what_undo_did(undone):
     return f"{text} {label} is no longer one of your labels. It stays in Gmail, empty, and you can delete it there."
 
 
+def undo_unless_sorting(change_id):
+    """Undo one of my changes, unless a run is going (see no_sorting_meanwhile() in sorting.py)."""
+    with sorting.no_sorting_meanwhile():
+        return labelling.undo_change(change_id)
+
+
 @app.post("/history/changes/{change_id}/undo")
 def undo_my_change(request: Request, change_id: int):
-    """Undo one of my changes, and show how it went in its row."""
-    row_id = f"change-{change_id}"
-    try:
-        with sorting.no_sorting_meanwhile():
-            undone = labelling.undo_change(change_id)
-    except sorting.SortingNowError:
-        return row_problem(request, row_id, "Not undone: sorting is going. Try again when it's finished.")
-    except SignInNeededError:
-        # A row has no room for the sign-in button, so the page reloads and shows its notice.
-        return Response(headers={"HX-Refresh": "true"})
-    except Exception as error:
-        log.exception("Couldn't finish undoing a change")
-        return row_problem(request, row_id, f"Couldn't finish: {sorting.explain(error)}")
+    """Undo one of my changes from the list of them, and show how it went in its row."""
+    undone, problem = attempt(request, f"change-{change_id}", lambda: undo_unless_sorting(change_id))
+    if problem:
+        return problem
     with closing(database.connect()) as conn:
         total = len(database.my_changes(conn))
     return templates.TemplateResponse(
@@ -461,6 +476,53 @@ def undo_my_change(request: Request, change_id: int):
         name="_change_undone.html",
         context={"undone": undone, "what_undo_did": what_undo_did(undone) if undone else None, "total": total},
     )
+
+
+def my_labels():
+    """My labels for a dropdown, read fresh for every page load, with no capitals in the way of the order.
+
+    Empty if labels.json can't be read, because the list of emails is still useful without a dropdown.
+    """
+    try:
+        return sorted(load_labels(), key=str.lower)
+    except (OSError, ValueError, KeyError):
+        log.exception("Couldn't read labels.json")
+        return []
+
+
+def email_row(request, message_id, message=None):
+    """Draw one row of the list of emails again after a click, with what happened if there's something to say."""
+    inbox_ids, _ = check_inbox()
+    with closing(database.connect()) as conn:
+        email = database.listed_email(conn, message_id)
+        change = database.newest_changes(conn, [message_id]).get(message_id)
+    return templates.TemplateResponse(
+        request=request,
+        name="_email_row.html",
+        context={
+            "email": email,
+            "in_inbox": email is not None and in_my_inbox(email, inbox_ids),
+            "change": change,
+            "message": message,
+            "labels": my_labels(),
+            "gmail_address": saved_account(),
+        },
+    )
+
+
+# The buttons on a row of the list of emails. The answer normally replaces the row (see _email_row.html).
+@app.post("/history/emails/{message_id}/label")
+def change_email_label(request: Request, message_id: str, label: Annotated[str, Form()] = ""):
+    """Give an email another of my labels, and draw its row again."""
+    _, problem = attempt(request, message_id, lambda: labelling.change_label(message_id, label))
+    return problem or email_row(request, message_id)
+
+
+@app.post("/history/emails/{message_id}/changes/{change_id}/undo")
+def undo_change_in_list(request: Request, message_id: str, change_id: int):
+    """Undo one of my changes from the email's row in the list, and draw the row again."""
+    undone, problem = attempt(request, message_id, lambda: undo_unless_sorting(change_id))
+    return problem or email_row(request, message_id, what_undo_did(undone) if undone else "This change has already been undone.")
 
 
 @app.get("/history/emails")
@@ -477,13 +539,15 @@ def find_email(request: Request, q: str = "", run: str = "", label: str = "", pa
         page = min(max(page, 1), last_page)  # an old link can ask for a page that no longer exists
         first = (page - 1) * EMAILS_PER_PAGE
         emails = database.find_emails(conn, search, run, label, limit=EMAILS_PER_PAGE, offset=first)
+        changes = database.newest_changes(conn, [email["message_id"] for email in emails])
         started = database.run_started(conn, run) if run else None
     return templates.TemplateResponse(
         request=request,
         name="history_emails.html",
         context={
             "active": "history",
-            "emails": [(email, in_my_inbox(email, inbox_ids)) for email in emails],
+            "emails": [(email, in_my_inbox(email, inbox_ids), changes.get(email["message_id"])) for email in emails],
+            "labels": my_labels(),  # for each row's dropdown
             "total": total,
             "first": first,
             "page": page,

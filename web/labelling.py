@@ -42,6 +42,14 @@ class BadLabelError(ValueError):
     """A new label that can't be saved. The message says why, in words for the page."""
 
 
+class SameLabelError(ValueError):
+    """The email already has that label, for example because the page it came from is out of date."""
+
+
+class NotNewestChangeError(RuntimeError):
+    """A newer change to the same email has to be undone first, for example because the page is out of date."""
+
+
 @dataclass
 class Changed:
     """What happened to an email after a click, for its row on the page."""
@@ -58,6 +66,8 @@ class Undone:
     """What undoing a change did, for its row on the page."""
 
     subject: str
+    old_label: str  # the label it has again
+    waiting_for_label: bool  # it's back on the Unsorted page. Not if it's still rejected, from before the undone change
     back_in_inbox: bool
     email_gone: bool  # it isn't in Gmail any more, so only the log changed
     created_label: str | None = None  # the label the undone click added to labels.json, if it did
@@ -102,18 +112,27 @@ def _leaves_inbox(email, labels_now):
     return ARCHIVE_SORTED_EMAILS and "INBOX" in labels_now and not email["needs_me"]
 
 
+def _label_id(service, label_ids, name):
+    """The ID of a label that should be in Gmail, which gets made again if I've deleted it there."""
+    return label_ids.get(name) or get_or_create_labels(service, [name])[name]
+
+
 def _move(conn, service, email, label, action, label_created=False):
-    """Move an email from Unsorted to a label: change it in Gmail, then record it in the log."""
+    """Move an email from the label it has to another: change it in Gmail, then record it in the log."""
     message_id = email["message_id"]
     with explain_failures():
-        label_ids = get_or_create_labels(service, [label, UNSORTED])
+        label_ids = {known["name"]: known["id"] for known in list_labels(service)}
+        new_id = _label_id(service, label_ids, label)
+        old_id = label_ids.get(email["label"])  # None if I've deleted it in Gmail, and then there's nothing to take off
         labels_now = current_labels(service, message_id)
         # If the email already has this label (for example from my own Gmail filter),
         # note that, so undo won't remove a label this change didn't add.
-        label_added = label_ids[label] not in labels_now
-        left_inbox = _leaves_inbox(email, labels_now)
-        add = [label_ids[label]] if label_added else []
-        remove = [label_ids[UNSORTED]] if label_ids[UNSORTED] in labels_now else []
+        label_added = new_id not in labels_now
+        # An email waiting for a label stays in the inbox only until I've decided. Any other email
+        # in my inbox is there because it needs me or I put it there, so fixing its label leaves it.
+        left_inbox = email["label"] == UNSORTED and _leaves_inbox(email, labels_now)
+        add = [new_id] if label_added else []
+        remove = [old_id] if old_id in labels_now else []
         if left_inbox:
             remove.append("INBOX")  # archiving means removing Gmail's INBOX label
         if add or remove:
@@ -134,6 +153,25 @@ def move_to_label(message_id, label):
         email = database.unsorted_email(conn, message_id)
         if email is None:
             return None
+        service = get_gmail_service(allow_browser_sign_in=False)
+        return _move(conn, service, email, label, "picked")
+
+
+def change_label(message_id, label):
+    """Give any email in the log another of my labels, for example because Claude chose the wrong one.
+
+    It stays recorded as a change, with Claude's answer as the old label, which Step 8's accuracy
+    tests can use. Returns what happened, or None if the log doesn't know the email any more,
+    for example because its run has been undone.
+    """
+    if label not in load_labels():
+        raise NoSuchLabelError(label)
+    with _one_at_a_time, closing(database.connect()) as conn:
+        email = database.listed_email(conn, message_id)
+        if email is None:
+            return None
+        if email["label"] == label:
+            raise SameLabelError(label)
         service = get_gmail_service(allow_browser_sign_in=False)
         return _move(conn, service, email, label, "picked")
 
@@ -198,8 +236,7 @@ def _put_back_in_gmail(service, change):
     add, remove = [], []
     if change["new_label"] != change["old_label"]:  # rejecting keeps the label, so then there's none to swap
         label_ids = {label["name"]: label["id"] for label in list_labels(service)}
-        # The old label goes back on, and gets made again if I've deleted it in Gmail since.
-        add.append(label_ids.get(change["old_label"]) or get_or_create_labels(service, [change["old_label"]])[change["old_label"]])
+        add.append(_label_id(service, label_ids, change["old_label"]))
         # The new label only comes off if this change added it, and if it's still in Gmail.
         if change["new_label_added"] and change["new_label"] in label_ids:
             remove.append(label_ids[change["new_label"]])
@@ -231,7 +268,8 @@ def _forget_new_label(conn, label, undone):
 def undo_change(change_id):
     """Undo one of my changes: the email goes back to how it was, first in Gmail, then in the log.
 
-    An email that isn't in Gmail any more has nothing to change there, so only the log changes.
+    Only an email's newest change can be undone (see _MY_CHANGES in database.py). An email that
+    isn't in Gmail any more has nothing to change there, so only the log changes.
 
     Returns what happened, or None if there's nothing to undo any more, for example after a second click.
     """
@@ -239,6 +277,8 @@ def undo_change(change_id):
         change = database.my_change(conn, change_id)
         if change is None:
             return None
+        if not change["newest"]:
+            raise NotNewestChangeError(change_id)
         service = get_gmail_service(allow_browser_sign_in=False)
         email_gone = False
         try:
@@ -247,7 +287,13 @@ def undo_change(change_id):
         except EmailGoneError:
             email_gone = True
         database.save_undone_change(conn, change)
-        undone = Undone(change["subject"], bool(change["left_inbox"]) and not email_gone, email_gone)
+        undone = Undone(
+            subject=change["subject"],
+            old_label=change["old_label"],
+            waiting_for_label=database.unsorted_email(conn, change["message_id"]) is not None,
+            back_in_inbox=bool(change["left_inbox"]) and not email_gone,
+            email_gone=email_gone,
+        )
         if change["label_created"]:
             _forget_new_label(conn, change["new_label"], undone)
     return undone

@@ -1013,6 +1013,14 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - **On the page:** a "Your changes" section on History with a count, rejected emails included, and a link at the top that jumps to it. Each row gives the email, what I did and when, an Undo button and Open in Gmail. The row Unsorted leaves behind links here. The answer replaces only that row, as on the Unsorted page.
   - **History now asks Gmail once per page load,** like the other pages. Undo needs Gmail, so the page has to say when I need to sign in. Without that, a click after the login ended would reload the page with no explanation.
   - **Smaller choices:** Undo takes one click with no "are you sure?", because I can make the change again. "Your changes" sits below the runs, as sketched in the plan, and the link at the top is there because the runs will get more numerous. A problem shows in the row, like on the Unsorted page, so `_unsorted_problem.html` became `_row_problem.html`.
+- **Built, part 4: changing any email's label:**
+  - `change_label()` in `web/labelling.py` gives any email in the log another of my labels, through the same `_move()` as the Unsorted page's buttons. `_move()` now takes off the label the email has, instead of always Unsorted. The change is recorded like any other, so `label_changes` keeps Claude's answer next to mine, which gives Step 8 corrections on ordinary emails, not only the Unsorted ones.
+  - **The inbox stays out of it:** an email in my inbox is there because it needs me or I put it there, so fixing its label leaves it where it is. Only an email waiting for a label leaves, by piece 4's rule.
+  - **Only an email's newest change can be undone,** like taking plates off a stack ("last in, first out"). Undoing an older one would bring back a label from before the newer change. `newest` in `_MY_CHANGES` says which one that is, `undo_change()` refuses the others, and an older row under "Your changes" says why it has no button.
+  - On each row of the list, `_email_row.html` adds a Change label fold with a dropdown and a Move button. Once I've changed an email, its row shows what I did with an Undo, from `newest_changes()`, on later page loads too.
+  - `change_email_label()` and `undo_change_in_list()` in `web/app.py` answer by drawing the row again with `email_row()`, so I keep my place in the list. `attempt()` now holds what every button does when something goes wrong, instead of each one having its own copy.
+  - `my_labels()`: a broken `labels.json` no longer takes the list down. The rows just lose their dropdown until it's fixed.
+  - **Smaller choices:** the dropdown leaves out the label the email has. A move no longer makes a label again if I've deleted it in Gmail, which also goes for the Unsorted page's buttons. An open fold takes a whole line at every width now that a row has two.
 - **Learned:**
   - A test that can't fail proves nothing. I broke the page's SQL on purpose in two ways, and the tests failed 14 and 54 times ("mutation testing").
   - A test's expected numbers should come from somewhere other than the code it's testing. Mine add up each run one row at a time in Python, rather than reuse the page's SQL.
@@ -1022,6 +1030,8 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - When moving code shouldn't change anything, the strongest check is to run both versions side by side: the committed app and the new one, on the same data, on two ports, compared page by page.
   - Made-up test data can hide a bug by being too tidy. Every made-up email started with "the agent added this label", so a break that stopped undo restoring that note passed all the tests. The real risk was a later whole-run undo leaving the wrong label on, so I added an email where the note starts as no.
   - A screenshot can catch a page mid-update. One showed an error in the wrong colour and size, while the browser's own numbers said it was right, and a second screenshot agreed with them.
+  - Allowing a second change to an email broke an assumption that part 3 relied on without saying so: one change per email. New features can do that to old code, so I wrote the rule down in the code (`newest`) and tested the order of undoing both ways.
+  - Reworking shared code needs proof for everyone who shares it. Since `_move()` is also behind the Unsorted page's buttons, I ran the committed version and the new one through the same 10 emails and compared every answer, request, log row and the `labels.json` file.
 - **Result:**
   - **Part 1, 151 free tests, on copies of my real log:**
     - **The numbers:** every number on each card matches what the rows say, worked out separately: 3 runs of 99, 2,836 and 3,653, newest first, costing $0.05, $0.66 and $0.86, and each run's label counts add up to its emails.
@@ -1050,6 +1060,17 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
     - **Breaking the code on purpose:** 17 different breaks each make tests fail, after I added checks for the one that didn't at first (see Learned).
     - My real log's rows and `labels.json` stayed the same. Tests for parts 1 and 2 still pass, after updating them for the new links and for History asking Gmail.
   - **Part 3, in a real browser, with made-up emails and a stand-in for Gmail:** Undo with a real click replaced the row and updated the count with no reload. When the stand-in failed on purpose, the problem showed in the row, and the same click then worked. Undoing a new label took it out of the Unsorted page's dropdown, and the link from an Unsorted row lands on the list. It fits at phone width with no console errors. Measuring found a gap: at phone width the top bar is 135 pixels tall, more than the 80 I'd left for the jump link, so the heading could have hidden under it. It has 160 now.
+  - **Part 4, 363 free tests, on copies of my real log and `labels.json`, with a stand-in for Gmail's API:**
+    - **Changing a label:** in Gmail the old label comes off and the new one goes on, and the log keeps Claude's answer as the old label. A to-do stays in the inbox and on the list, an archived email stays archived, an email I put back in my inbox stays there, and one waiting for a label leaves by piece 4's rule. A label the email already had is noted, so undoing leaves it on.
+    - **Undoing:** the log's row comes back exactly as it was, even after two changes undone in turn. An older change is refused until the newer one is undone. An email rejected and then moved goes back under Unsorted, still rejected, and undoing the reject too puts it back on the Unsorted page.
+    - **Refused, with nothing changed:** the label it already has, a label that isn't mine, no label, Unsorted, and an email the log doesn't know.
+    - **Failures:** Gmail's 3 requests for a change each failed in 8 different ways, and so did the 2 for an undo, with nothing recorded, and the same click worked afterwards. A broken `labels.json` leaves the list working without its dropdowns.
+    - **Clicks:** 8 at the same moment gave one change, and a move and an undo at the same moment left Gmail and the log agreeing. 6 kinds of forged click were refused for each new button. Undo in the row waits for a sort.
+    - **The Unsorted page's buttons, side by side with the committed code:** the same answers, requests, Gmail labels, log rows and `labels.json` on 10 emails.
+    - **The rest:** text trying to be code stays plain text, including in the dropdown. The real `undo.py` takes the label I gave an email off and returns it to the inbox, also after two changes. A page of the list takes about 35 milliseconds.
+    - **Breaking the code on purpose:** 19 different breaks each make tests fail.
+    - My real log's rows and `labels.json` stayed the same. Tests for parts 1 to 3 still pass.
+  - **Part 4, in a real browser, with made-up emails and a stand-in for Gmail:** I opened the fold, chose a label and pressed Move twice with real clicks. The row updated with no reload and offered only the newest change's Undo, and "Your changes" explained why the older one had no button. When the stand-in failed on purpose, the problem showed in the row, and the same click then worked. Both folds open stack neatly at desktop and phone width, the page is no wider than a phone, and the console shows no errors.
 - **Found:**
   - **The refusal at email 37 isn't explained by the per-minute allowance.** Fetching one email costs 20 units, so 45 emails is only 900 of 6,000. Google also describes a limit on requests at the same moment, which batches can trigger. That may be the cause, and then waiting a full minute would be longer than needed. It's on the list below.
   - **The log and `labels.json` haven't changed since their backups in `backups/`.** The real checks get a fresh backup anyway, because the log will have changed by then.
@@ -1057,6 +1078,8 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - **After an Undo, the run's card above is out of date until the page is next loaded,** because the answer only replaces the row. The numbers on the card are right after a reload.
   - **A label can outlive the emails that used it.** Only undoing the click that made a label removes it, so if I undo that click while another email has the label, then undo the other email, the label stays in `labels.json`. The same goes if Approve fails after saving the label, because the click that finishes the job no longer counts as the one that made it. It's harmless, and I can take it out of the file by hand.
   - **Undoing an edited label loses my wording.** The Unsorted row shows Claude's suggestion again, because the log doesn't keep what I typed.
+  - **After Change label, a filtered list can be out of date until the next page load.** In a list filtered to one label, the row stays where it is, showing its new label, so I can still undo it there.
+  - **No new labels from the list.** The dropdown only has labels I already have. Making one stays on the Unsorted page, so an email that needs a label I don't have yet has to wait until I've made it there or added it to `labels.json`.
 
 ## What's left
 
@@ -1112,7 +1135,7 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - [x] part 1: past runs, with how many emails have each label
   - [x] part 2: find an email: a list of all emails with a search, and Claude's reason for each
   - [x] part 3: my changes, including rejected emails, and undoing one of them
-  - [ ] part 4: change the label of any email
+  - [x] part 4: change the label of any email
   - [ ] part 5: the "Needs action" button, and undoing it
   - [ ] part 6: undoing a whole run from the page, sharing `undo.py`'s logic
 - [ ] Once the History page is up, the real checks, in this order, with a fresh backup first:
