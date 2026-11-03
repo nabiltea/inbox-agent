@@ -4,6 +4,29 @@ An AI agent that organizes my Gmail. It sorts every email into labels, flags wha
 
 **It sorted my whole backlog: 6,547 emails for $1.54, taking my inbox from 6,494 emails to 60.** It has no way to send or delete an email, and I can undo what it does.
 
+## What it looks like
+
+These are the real pages, with made-up emails. Click a picture to see it full size.
+
+<table>
+  <tr>
+    <th width="50%">Home: what needs me and what it has cost</th>
+    <th width="50%">Action needed: my to-dos, most pressing first</th>
+  </tr>
+  <tr>
+    <td><a href="docs/screenshots/home.png"><img src="docs/screenshots/home.png" alt="The home page"></a></td>
+    <td><a href="docs/screenshots/action-needed.png"><img src="docs/screenshots/action-needed.png" alt="The Action needed page"></a></td>
+  </tr>
+  <tr>
+    <th>Unsorted: emails that fit no label, each with a suggestion</th>
+    <th>History: what each run did, and how to undo it</th>
+  </tr>
+  <tr>
+    <td><a href="docs/screenshots/unsorted.png"><img src="docs/screenshots/unsorted.png" alt="The Unsorted page"></a></td>
+    <td><a href="docs/screenshots/history.png"><img src="docs/screenshots/history.png" alt="The History page"></a></td>
+  </tr>
+</table>
+
 ## How it works
 
 ```mermaid
