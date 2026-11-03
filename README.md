@@ -971,6 +971,48 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - **For piece 5:** undoing a whole run takes a new label off its emails, but the label stays in Gmail and `labels.json`. `label_created` is there so that undoing the click that made a label can also remove it.
   - **A small gap:** if a label gets saved but moving the email fails, the other rows' dropdowns only get the label at the next page load.
 
+**Piece 5: the History page**
+- **Checked first, read-only:**
+  - **Undoing a run is quicker than I feared.** The log's 3 runs would take 15, 16 and 23 requests to Gmail, because emails that need the same change share a request, up to 1,000 per request. When the two backlog runs were applied, that many requests took about half a minute. At 50 "units" each, they're well within Google's allowance of 6,000 units a minute per user.
+  - **The slow, costly part comes afterwards.** Undone emails count as new again. For the run of 3,653, the Sort button would take about 2 hours and $1.70, over about 4 presses because of its $0.50 limit, and each press first fetches every email that's still new. `backlog.py` does the same for $0.86.
+  - **All 45 Unsorted emails are in the two backlog runs,** so most of my hand changes will sit in the runs I'd least want to undo.
+  - **A missed email is probably a recent one:** only 209 of the 6,526 archived emails are from the last 30 days.
+  - **Google's docs leave one thing open:** they don't say what a many-at-once change does if it names an email that no longer exists. They do say deleting a label is immediate and permanent.
+- **Decided:**
+  - **The page undoes runs of up to 1,000 emails.** That's about the biggest the Sort button can make, since its $0.50 limit buys about 1,050 first looks. A bigger run shows the `undo.py` command and why. A backlog undo is only half a job: it floods the inbox, and the cheap way back, `backlog.py`, is in the terminal anyway. This is easy to open up later, but a slip can't be taken back.
+  - **A fold on the run's card confirms first,** with the exact numbers and the button inside, worked out by the same code that does the undo. A browser pop-up is easy to click through and has no room for the numbers. The click waits, as with Move, and the button says "Undoing…", because 15 to 25 requests don't need a live progress box.
+  - **`undo_run()` in `undo.py` serves both the terminal and the page,** the way the Sort button uses `apply_sorted()` from `triage.py`. It forgets each group of emails straight after its Gmail request, so the log always matches Gmail. Repeating a label change is harmless ("idempotent"), so an undo that stops partway can be finished by pressing it again. Running `undo.py` myself shows the same numbers and asks for a yes. The page's buttons never need the terminal.
+  - **Undoing a run leaves alone what I've changed or archived myself.** This replaces piece 4's choice, because a warning would only offer two bad options: lose my work, or don't undo. A common reason to undo a run is that Claude sorted it badly, and then my fixes are the part worth keeping. It also closes a trap: an email I'd archived myself would lose its label and be forgotten, but never be sorted again, because it isn't in the inbox.
+  - **An undone change is crossed out, not erased,** with an `undone_at` date on its row in `label_changes`, so `_WAITING_FOR_LABEL` can ignore it and the email comes back onto the Unsorted page. Deleting the row would lose what Step 8 wants, and a separate reversal row, as a bank would add, would make every count work out which rows cancel which.
+  - **Undoing the click that made a label takes it out of `labels.json` if no other email in the log has it, and leaves it empty in Gmail.** Otherwise a mistaken approval would keep steering Claude on every future email. Deleting it in Gmail is ruled out: it can't be undone, and `label_created` only means the click added it to `labels.json`, so it could be an old Gmail label of mine, on emails the log doesn't know.
+  - **Rejected emails are listed with my other changes,** newest first, each with an Undo.
+  - **The counts show the label each email has now,** which is what Gmail shows and what undoing the run would reverse. Claude's first answer stays in `label_changes` for Step 8. The home page stays as it is, as piece 1f kept this split off it.
+  - **"Needs action" never overwrites Claude's answer.** An email needs two things to be on my to-do list: the log has to say it needs me, and it has to be in my inbox. So the button puts it back in the inbox if it isn't there, and adds a row to `label_changes`. "Claude said no, I said yes" is exactly the miss Step 8's accuracy tests look for, so it has to survive. The to-do is the email's subject, with no paid full read behind the click.
+  - **One list of all emails, newest first, 50 a page, with a search on sender and subject.** I'd remember who sent an email, not which run it was in. Each run's card and label counts link into it. It searches the log, so it's instant and free, and it can't see inside emails. Gmail's search could be added later if this isn't enough.
+  - **An email with the wrong label gets a Change label fold, not an undo.** Undoing one email would put it back in my inbox and forget it, and the next Sort might give the same answer, for a small cost. Changing the label fixes it and keeps Claude's answer next to mine. A Why fold shows Claude's reason, and the rows stay tidy because both folds stay closed. No checkboxes for now: my ticks would be lost when changing page, and I don't expect to fix many at once.
+  - **Smaller choices:** changing a label doesn't move an email in or out of the inbox, apart from Unsorted emails, which keep piece 4's rule. An email can now change more than once, so only its newest change has an Undo. The dropdown has my existing labels only. An undone change leaves the list but stays in the log. Undo and Sort can't overlap, so a label can't vanish in the middle of a run.
+- **Built, part 1: the runs:**
+  - `_RUN_NUMBERS` in `database.py` adds up each run in one query: how many emails it sorted, archived and left in the inbox as needing me, how many have the label Unsorted now, how many I've changed by hand, and the cost, with its full reads. `run_summaries()` returns every run, and `last_run_summary()` behind the home page is now the same query cut to its first row, so the two can't disagree.
+  - `run_label_counts()`: how many of each run's emails have each label now, biggest first.
+  - `history()` in `web/app.py` and `history.html` draw a card per run, newest first, with the labels in a fold. It all comes from the log, so the page doesn't ask Gmail. `show_logged_moment()` adds the time, which tells apart two runs on one day.
+  - **Smaller choices:** a card says "needed you" rather than "need you", because it's what happened at the time, and Action needed is the list for now. Unsorted and my hand changes only appear when there are some. A gray tag marks backlog runs.
+- **Learned:**
+  - A test that can't fail proves nothing. I broke the page's SQL on purpose in two ways, and the tests failed 14 and 54 times ("mutation testing").
+  - A test's expected numbers should come from somewhere other than the code it's testing. Mine add up each run one row at a time in Python, rather than reuse the page's SQL.
+  - To compare two database files, compare their rows. My log and its backup had different fingerprints but the same 6,588 rows: only 5 bytes differed, in the bookkeeping at the top of the file.
+- **Result:**
+  - **Part 1, 151 free tests, on copies of my real log:**
+    - **The numbers:** every number on each card matches what the rows say, worked out separately: 3 runs of 99, 2,836 and 3,653, newest first, costing $0.05, $0.66 and $0.86, and each run's label counts add up to its emails.
+    - **Hand changes:** a moved email counts under its new label, a rejected one stays under Unsorted, and an email with two changes counts once, with the totals unchanged.
+    - **Full reads:** the full read has the last word on what needed me, and its cost is added.
+    - **The home page:** it came out the same with the committed code and the new code, and its numbers stayed the same with full reads and hand changes.
+    - **The rest:** text trying to be code stays plain text, an ampersand arrives intact, a log with no runs says so, and "1 email" and "1 label" read right. The page writes nothing to the log, never asks Gmail, and takes about 11 milliseconds to load, or 73 with 300 hand changes.
+    - My real log, `labels.json` and `token.json` stayed byte-for-byte the same.
+  - **Part 1, in a real browser, with made-up runs:** the folds open and close, the labels fill two columns at desktop width and one at phone width, the page is no wider than a phone, nothing loads from outside, and the console shows no errors.
+- **Found:**
+  - **The refusal at email 37 isn't explained by the per-minute allowance.** Fetching one email costs 20 units, so 45 emails is only 900 of 6,000. Google also describes a limit on requests at the same moment, which batches can trigger. That may be the cause, and then waiting a full minute would be longer than needed. It's on the list below.
+  - **The log and `labels.json` haven't changed since their backups in `backups/`.** The real checks get a fresh backup anyway, because the log will have changed by then.
+
 ## What's left
 
 - [x] **Step 1:** First call to Claude
@@ -1021,8 +1063,22 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - [x] part 3: reject a suggestion
   - [x] part 4: read the labels at the start of each run, so a new label works without a restart
   - [x] part 5: approve or edit a suggestion, which adds the new label to Gmail and `labels.json`
-- [ ] **Step 7, piece 5:** the History page: past runs, how many emails went to each label, undo (whole runs and my own label changes), and a "Needs action" button
-- [ ] Once the History page is up, the real checks of the Unsorted page: move one real email, add one real label, and click Open in Gmail on an archived email
+- [ ] **Step 7, piece 5:** the History page, in six parts:
+  - [x] part 1: past runs, with how many emails have each label
+  - [ ] part 2: find an email: a list of all emails with a search, and Claude's reason for each
+  - [ ] part 3: my changes, including rejected emails, and undoing one of them
+  - [ ] part 4: change the label of any email
+  - [ ] part 5: the "Needs action" button, and undoing it
+  - [ ] part 6: undoing a whole run from the page, sharing `undo.py`'s logic
+- [ ] Once the History page is up, the real checks, in this order, with a fresh backup first:
+  - [ ] click Open in Gmail on an archived email, which changes nothing
+  - [ ] move one real email and change one real label, and undo each
+  - [ ] reject one email and undo it
+  - [ ] add one real label, which shows how Gmail treats capitals, and undo it
+  - [ ] "Needs action" on one archived email, and undo it
+  - [ ] sort 3 emails with `triage.py 3 --apply`, and undo that run on the page, to prove the safety net works
+  - [ ] another fresh backup, then press Sort for the first time
+- [ ] Find out why Gmail refused part of a request for 45 emails at once, at email 37, and whether the code needs to wait a full minute
 - [ ] **Step 7, piece 6:** the draft flow: "Draft reply" with a hints box, the Critic's verdict, and saving to Gmail drafts, also when the Critic isn't satisfied
 - [ ] An archive button for to-dos on the page, so I can clear the overdue ones there instead of in Gmail. A row can hold several conversations, so one click should archive them all. It's protected like every other button, by the protection against other websites that piece 3 added
 - [ ] A double-click shortcut that starts the web page, so opening it doesn't need VS Code

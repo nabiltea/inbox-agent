@@ -5,7 +5,7 @@ function, and each page is an HTML template in web/templates/ that the function
 fills in. There are three pages, Action needed, Unsorted and History, which share
 one layout with the menu and the "Sort new emails" button (web/templates/base.html).
 Action needed lists my to-dos, and Unsorted the emails that fit no label, where I decide
-what happens to each one's suggested label. History says which piece it arrives in.
+what happens to each one's suggested label. History shows what each sorting run did.
 
 Start it from the project folder with:
   python -m uvicorn web.app:app --reload
@@ -132,6 +132,12 @@ def show_logged_date(text):
     return show_date(datetime.fromisoformat(text))
 
 
+def show_logged_moment(text):
+    """A date and time straight from the log, like "Fri 24 Oct, 18:02", which tells apart two runs on one day."""
+    moment = datetime.fromisoformat(text)
+    return f"{show_date(moment)}, {moment:%H:%M}"
+
+
 def show_deadline(deadline):
     """A deadline in words: "Due today", "Due tomorrow", "Due Tue 10 Nov" or "Was due Fri 6 Nov"."""
     days_left = (deadline - date.today()).days
@@ -147,6 +153,7 @@ def show_deadline(deadline):
 # Lets the templates use these as "filters": {{ todo.received|show_date }}
 templates.env.filters["show_date"] = show_date
 templates.env.filters["show_logged_date"] = show_logged_date
+templates.env.filters["show_logged_moment"] = show_logged_moment
 templates.env.filters["show_deadline"] = show_deadline
 templates.env.filters["clean"] = labelling.clean
 
@@ -368,8 +375,15 @@ def row_problem(request, message_id, problem):
 
 @app.get("/history")
 def history(request: Request):
-    """History: past runs, what was sorted where, and undo. A placeholder until piece 5."""
-    return templates.TemplateResponse(request=request, name="history.html", context={"active": "history"})
+    """History: what each sorting run did, newest first. It all comes from the log, so Gmail doesn't get asked."""
+    with closing(database.connect()) as conn:
+        runs = database.run_summaries(conn)
+        label_counts = database.run_label_counts(conn)
+    return templates.TemplateResponse(
+        request=request,
+        name="history.html",
+        context={"active": "history", "runs": runs, "label_counts": label_counts},
+    )
 
 
 # The "Sort new emails" button. The sorting itself runs on a second thread (see sorting.py).

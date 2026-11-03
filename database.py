@@ -218,23 +218,49 @@ def last_run(conn):
     return get_run(conn, runs[0]["run_id"]) if runs else []
 
 
-# For the web page's overview. SQL does the adding up: COUNT and SUM total the rows
-# inside the database, so only the totals come back to Python, not thousands of rows.
+# For the web page's overview and History page. SQL does the adding up: COUNT and SUM total
+# the rows inside the database, so only the totals come back to Python, not thousands of rows.
+
+# Each run in numbers, newest first: when it started, how many emails it sorted, archived and
+# left in the inbox as needing me, how many have the label Unsorted now, how many I've changed
+# by hand, and what it cost, with its full reads. backlog.py starts its runs' names with "backlog-".
+#
+# Needing me follows the same rule as flagged_emails(): it has to be still in the inbox, and
+# the full read has the last word. COALESCE takes its answer, and without a full read (NULL) it
+# takes triage's first look instead. EXISTS counts an email once, however many changes it has.
+_RUN_NUMBERS = """
+    SELECT decisions.run_id, decisions.run_id LIKE 'backlog-%' AS from_backlog,
+           MIN(decisions.processed_at) AS started, COUNT(*) AS emails, SUM(decisions.archived) AS archived,
+           SUM(decisions.archived = 0 AND COALESCE(f.needs_me = 'yes', decisions.needs_reply = 1 OR decisions.needs_action = 1)) AS flagged,
+           SUM(decisions.label = 'Unsorted') AS unsorted,
+           SUM(EXISTS (SELECT 1 FROM label_changes AS c WHERE c.message_id = decisions.message_id)) AS changed_by_hand,
+           COALESCE(SUM(decisions.cost), 0) + COALESCE(SUM(f.cost), 0) AS cost
+    FROM decisions LEFT JOIN full_reads AS f ON f.message_id = decisions.message_id
+    GROUP BY decisions.run_id ORDER BY started DESC
+"""
+
+
+def run_summaries(conn):
+    """Every run in numbers, newest first (see _RUN_NUMBERS)."""
+    return conn.execute(_RUN_NUMBERS).fetchall()
+
 
 def last_run_summary(conn):
-    """The most recent run in numbers: when it started, and how many emails it sorted,
-    archived and left in the inbox as needing me. None if there are no runs yet.
+    """The most recent run in numbers (see _RUN_NUMBERS). None if there are no runs yet."""
+    return conn.execute(f"{_RUN_NUMBERS} LIMIT 1").fetchone()
 
-    The same rule as flagged_emails(): it has to be still in the inbox, and the full read
-    has the last word. COALESCE takes its answer, and without a full read (NULL) it takes
-    triage's first look instead.
+
+def run_label_counts(conn):
+    """How many of each run's emails have each label now, biggest first: {run ID: rows of label and emails}.
+
+    decisions holds the label each email has now, so my hand changes count. That's what Gmail
+    shows, and what undoing the run would reverse. Claude's first answer stays in label_changes.
     """
-    return conn.execute("""
-        SELECT MIN(decisions.processed_at) AS started, COUNT(*) AS emails, SUM(decisions.archived) AS archived,
-               SUM(decisions.archived = 0 AND COALESCE(f.needs_me = 'yes', decisions.needs_reply = 1 OR decisions.needs_action = 1)) AS flagged
-        FROM decisions LEFT JOIN full_reads AS f ON f.message_id = decisions.message_id
-        GROUP BY decisions.run_id ORDER BY started DESC LIMIT 1
-    """).fetchone()
+    rows = conn.execute("SELECT run_id, label, COUNT(*) AS emails FROM decisions GROUP BY run_id, label ORDER BY emails DESC, label")
+    counts = {}
+    for row in rows:
+        counts.setdefault(row["run_id"], []).append(row)
+    return counts
 
 
 # Which emails wait for me to decide about their label: those that fit no label, which triage

@@ -1,11 +1,51 @@
-{# The History page, a placeholder until piece 5 #}
+{# The History page: what each sorting run did, newest first. It fills the slots in base.html,
+   which draws the rest. #}
 {% extends "base.html" %}
+{% from "_macros.html" import tag %}
 
 {% block title %}History · {% endblock %}
 
 {% block content %}
   <h1 class="text-2xl font-semibold">History</h1>
-  <div class="mt-4 rounded-lg bg-white p-6 shadow-sm">
-    <p class="text-gray-600">Coming in piece 5: past runs, what was sorted where, and undo.</p>
-  </div>
+
+  <h2 class="mt-6 font-medium">Runs</h2>
+  {% if runs %}
+    <ul class="mt-2 space-y-3">
+      {% for run in runs %}
+        <li class="rounded-lg bg-white px-5 py-4 shadow-sm">
+          <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <p class="font-medium">
+              {{ run.started|show_logged_moment }} · {{ "{:,}".format(run.emails) }} {{ "email" if run.emails == 1 else "emails" }} · {{ "$%.2f"|format(run.cost) }}
+            </p>
+            {% if run.from_backlog %}{{ tag("Backlog", "bg-gray-200 text-gray-700") }}{% endif %}
+          </div>
+          <p class="mt-0.5 text-sm text-gray-600">
+            {{ "{:,}".format(run.archived) }} archived · {{ run.flagged }} needed you
+            {% if run.unsorted %}· {{ run.unsorted }} in Unsorted{% endif %}
+            {% if run.changed_by_hand %}· you changed {{ run.changed_by_hand }} by hand{% endif %}
+          </p>
+          {# <details> is a fold the browser handles by itself, as on the other pages. These are the
+             labels the emails have now, so they match Gmail, including my hand changes. #}
+          {% set labels = label_counts[run.run_id] %}
+          <details class="mt-2 text-sm">
+            <summary class="cursor-pointer text-gray-600 hover:text-gray-900">
+              Where they are now: {{ labels|length }} {{ "label" if labels|length == 1 else "labels" }}
+            </summary>
+            <ul class="mt-2 grid gap-x-8 gap-y-0.5 sm:grid-cols-2">
+              {% for label in labels %}
+                <li class="flex justify-between gap-4">
+                  <span class="min-w-0">{{ label.label }}</span>
+                  <span class="text-gray-600">{{ "{:,}".format(label.emails) }}</span>
+                </li>
+              {% endfor %}
+            </ul>
+          </details>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <div class="mt-2 rounded-lg bg-white p-6 shadow-sm">
+      <p class="text-gray-600">No sorting runs yet.</p>
+    </div>
+  {% endif %}
 {% endblock %}
