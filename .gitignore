@@ -37,3 +37,7 @@ web/static/app.css
 .venv/
 __pycache__/
 *.pyc
+
+# Files Macs create by themselves: a folder's view settings, and companion files on USB sticks
+.DS_Store
+._*

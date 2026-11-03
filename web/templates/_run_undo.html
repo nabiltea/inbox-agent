@@ -7,7 +7,7 @@
 {% if run.emails > biggest_run %}
   <div class="mt-2 text-sm text-gray-600">
     <p>Too big to undo here, because it would flood your inbox, and the cheap way to sort it again, backlog.py, is in the terminal too. To undo it there:</p>
-    <p class="mt-1 font-mono text-xs break-all text-gray-800">.venv/Scripts/python undo.py --run {{ run.run_id }}</p>
+    <p class="mt-1 font-mono text-xs break-all text-gray-800">{{ own_python }} undo.py --run {{ run.run_id }}</p>
   </div>
 {% elif plan and plan.emails %}
   <details class="mt-2 text-sm">

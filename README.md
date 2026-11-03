@@ -1132,6 +1132,40 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - **The same hidden message on the Unsorted page, now fixed.** Since piece 4, when Approve made a new label, the page reloaded and kept my place, which could leave its green message out of sight: I measured it 499 pixels above the window, with the row simply gone. It was a trade-off, and I chose to see the message. The page now opens afresh at the top, like after undoing a run, which loses my place in the list. That costs little, because handled emails leave the list anyway. A click that doesn't make a new label still only changes its own row, so I keep my place then.
   - **Undoing a run lowers the cost card,** although the money was spent, because the card only knows what's in the log.
 
+### Getting ready for a Mac
+
+I planned a move from my Windows PC to my MacBook, then decided to keep the project on the PC for now. The log is a file on one computer and most of what the app needs isn't in Git, so the whole project has to move in one go, with both computers on the same Wi-Fi, and it wasn't worth rushing. What I built is the part that's useful anyway: the repo now works on both systems, so the move stays an option.
+
+**Decisions**
+- **The app works out which command to show.** Two error messages and the History page named `.venv\Scripts\python`. Neutral wording like `python undo.py` would have been simpler, but plain `python` can be another Python altogether: on my PC it's conda's.
+- **`constraints.txt` holds the exact version of all 57 packages.** `requirements.txt` only names the 11 I chose, so what those bring with them could come out newer on another computer than what I've tested. A constraints file only limits versions and never adds a package, so the Windows-only `pywin32` in it does nothing on a Mac.
+- **A `.gitattributes` file sets the line endings,** so the rule travels with the repo instead of depending on each computer's Git settings.
+- **Python 3.13.17 on a Mac.** It's the last 3.13 with a Mac installer, and differs from my PC's 3.13.11 only in fixes. A newer Python is a decision of its own, not one to mix into a move.
+- **What stays Windows-specific:** the Progress log, because it's history and still true, and the lock around `labels.json`, because Windows still needs it.
+
+**If I do move**
+- **The private files would go straight from one computer to the other, over SSH,** a sealed pipe between the two. Both computers already have what it needs, and no company would hold my API key, Gmail login or emails along the way, as OneDrive, iCloud or email would.
+- **On the Mac, the project would live in `~/Projects/`,** not on the Desktop or in Documents, which a Mac can keep in iCloud.
+- **Nothing may start on the Mac before the files arrive.** Without the log, the app silently creates an empty one. Without `token.json`, it accepts any Google account.
+
+- **Built:**
+  - `OWN_PYTHON` in `gmail_client.py`: the project's own Python on this computer, used by the two error messages and the History page.
+  - `constraints.txt`, `.gitattributes`, and `.DS_Store` and `._*` in `.gitignore`.
+  - Setup gives Windows and Mac commands where they differ. Tailwind's command is now the same on both, because PowerShell finds `tailwindcss.exe` from `tools/tailwindcss`.
+- **Learned:**
+  - **Line endings differ between systems.** Windows ends a line with two characters and Macs with one. Git for Windows' default setting (`core.autocrlf`) writes Windows endings when it checks out a file, and hides the difference from `git status`. So the same commit can give different files on two computers, unless the repo sets a rule.
+  - **Requirements and constraints do different jobs.** Requirements say what to install, and constraints say which versions are allowed if it gets installed. That's why one list of exact versions can serve two systems that need different packages.
+  - **To test for another system without having it,** I can judge each package's "only on this system" conditions as that system would, and ask PyPI whether a ready-made file exists for it.
+- **Result:**
+  - **19 of 19 checks on the app, on a copy of my log, with a stand-in for Gmail.** The two messages and the History page give the Windows command here and the Mac command when given the Mac's value, and the committed template fails that check, so the check can fail. All five pages load. Apart from the slashes, the History page is the same as the committed template's. My real log and `labels.json` stayed the same.
+  - **Line endings, in throwaway copies:** on a Windows-like setup without the new file, all 47 text files get Windows endings. With it, every text file has Mac-style endings on both setups, the two copies are identical byte for byte, and `git status` shows nothing.
+  - **Packages:** a Mac needs 56 of the 57, all but `pywin32`, and PyPI has a ready-made version of each for an Apple chip. On my PC, the new install command would change nothing.
+  - **The CSS:** a fresh build matches the file in use exactly.
+  - None of the Mac commands have run on a real Mac.
+- **Found:**
+  - **An Intel Mac would be harder.** `cryptography` 50.0.2 has no ready-made version for it, so it would have to be built from its source code. Setup says so.
+  - **Two Setup notes had drifted.** The Microsoft Store note, written for the Claude Desktop step, had ended up in the Drafter step, and the line about the log being a database had left the SQLite Viewer step. Both are back in place.
+
 ## What's left
 
 - [x] **Step 1:** First call to Claude
@@ -1189,6 +1223,8 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
   - [x] part 4: change the label of any email
   - [x] part 5: the "Needs action" button, and undoing it
   - [x] part 6: undoing a whole run from the page, sharing `undo.py`'s logic
+- [x] Get the repo ready for a Mac: the app, Setup and packages work on both systems
+- [ ] Move to my MacBook, if I still want to when I'm back. It needs a small tool for carrying the private files, and Setup's Mac commands still have to run on a real Mac
 - [ ] Once the History page is up, the real checks, in this order, with a fresh backup first:
   - [ ] click Open in Gmail on an archived email, which changes nothing
   - [ ] move one real email and change one real label, and undo each
@@ -1233,18 +1269,30 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 | `web/` | Step 7: the web page. `app.py` is the FastAPI app, with one function per page. `templates/` holds the HTML templates: `base.html` is the shared layout with the menu, and each page fills it in. `csrf.py` stops other websites pressing the app's buttons, `sorting.py` runs the "Sort new emails" button's work on a second thread, and `labelling.py` changes an email's label behind the Unsorted page's buttons, and undoes that from the History page. `tailwind.css` tells Tailwind's program what to build, and `static/` holds files sent to the browser as they are: the built CSS, the Inter font and HTMX |
 | `profile.example/` | Example versions of my profile files. The real ones are in `profile/`, which isn't in Git |
 | `requirements.txt` | Python packages, with exact versions |
+| `constraints.txt` | The exact version of every package, including what the ones in `requirements.txt` bring with them, so each computer gets the same ones |
 | `.env.example` | Template for the API key file |
+| `.gitattributes` | Keeps every text file's line endings the same on every computer |
 
-Not in Git: `.env` (API key), `credentials.json` (Google app file), `token.json` (saved Gmail login), `labels_proposed.json` (label suggestions that quote my real emails), `labels.json` and its temporary `labels.json.tmp` (my labels, whose descriptions name companies I applied to), `inbox_agent.db` (the log of my emails and decisions), `backups/` (copies of the log and my labels), `backlog_batch.json` (which batch is waiting, deleted after use), `style_source_emails.json` (my sent emails, collected for the writing-style file), `profile/` (my writing-style and about-me files), `.claude/` (settings for testing the web page in the Claude app), `tools/` (Tailwind's program, 112 MB), `web/static/app.css` (the CSS that Tailwind's program builds), `.venv/` (Python environment).
+Not in Git: `.env` (API key), `credentials.json` (Google app file), `token.json` (saved Gmail login), `labels_proposed.json` (label suggestions that quote my real emails), `labels.json` and its temporary `labels.json.tmp` (my labels, whose descriptions name companies I applied to), `inbox_agent.db` (the log of my emails and decisions), `backups/` (copies of the log and my labels), `backlog_batch.json` (which batch is waiting, deleted after use), `style_source_emails.json` (my sent emails, collected for the writing-style file), `profile/` (my writing-style and about-me files), `.claude/` (settings for testing the web page in the Claude app), `tools/` (Tailwind's program, 80 to 112 MB depending on the computer), `web/static/app.css` (the CSS that Tailwind's program builds), `.venv/` (Python environment), `.DS_Store` and `._*` (files Macs create by themselves).
 
 ## Setup
 
-1. Install Python 3.13.
-2. Create a virtual environment and install the dependencies:
+The commands work on Windows (in PowerShell) and on a Mac (in Terminal), unless a step shows one for each. The commands that start with `python` expect the virtual environment from step 2 to be active in that terminal. The Mac commands are for an Apple chip: on an Intel Mac, step 2's `cryptography` package has no ready-made version, and step 15's program is `tailwindcss-macos-x64`. I've only run these steps on Windows so far, so the Mac commands are untested.
+
+1. Install Python 3.13 from python.org. On a Mac, that's `python-3.13.17-macos11.pkg`, the last 3.13 with a Mac installer. Finish by double-clicking **Install Certificates.command** in `/Applications/Python 3.13/`.
+2. Create a virtual environment and install the dependencies. `constraints.txt` holds the exact version of every package, so each computer gets the same ones.
+
+   On Windows:
    ```
    py -3.13 -m venv .venv
    .venv\Scripts\activate
-   pip install -r requirements.txt
+   pip install -r requirements.txt -c constraints.txt
+   ```
+   On a Mac:
+   ```
+   python3.13 -m venv .venv
+   source .venv/bin/activate
+   pip install -r requirements.txt -c constraints.txt
    ```
 3. Copy `.env.example` to `.env` and paste in your API key from the Claude Console.
 4. In Google Cloud Console, turn on the Gmail API, set up the OAuth consent screen with yourself as a test user, and create a **Desktop app** OAuth client. Save its JSON file as `credentials.json` in the project folder.
@@ -1254,10 +1302,22 @@ Not in Git: `.env` (API key), `credentials.json` (Google app file), `token.json`
 8. Run `python label_designer.py` to have Claude Opus suggest a label set from 200 random inbox emails from the last 5 years, plus your current labels (about $0.40). If you already have a `labels.json`, it improves those labels instead of starting over. It saves the suggestion to `labels_proposed.json`. Nothing in Gmail changes. Review it, then save the labels you want to keep as `labels.json`, in the same format as `labels.example.json`. Until you do, triage uses the example labels.
 9. Run `python triage.py 10 --apply` to sort emails in Gmail for real, starting small. It adds the labels, and archives each sorted email unless it needs a reply or an action or is Unsorted. Gmail asks you to sign in again the first time, because changing labels needs more permission than reading. Emails that are already sorted get skipped. To reverse the last run, use `python undo.py`, which says what it would do and asks first, or the History page.
 10. To sort a large backlog at half price, use `python backlog.py sample 40` to check the labels on a random sample first. Then run `python backlog.py submit`, `python backlog.py wait` (usually under an hour) and `python backlog.py apply`. Each `apply` is one run that `python undo.py` can reverse.
-11. To look inside the log (`inbox_agent.db`) in VS Code, install the **SQLite Viewer** extension.
-12. Run `python check_mcp_server.py` to check the Gmail MCP server. To use it in Claude Desktop, add an `mcpServers` section to Claude Desktop's `claude_desktop_config.json`, keeping everything already in the file. The server's `command` is the full path to `.venv\Scripts\python.exe`, and its `args` is the full path to `gmail_mcp_server.py`. Then quit and reopen Claude Desktop. **Settings → Developer → Edit Config** shows where the file is.
+11. To look inside the log (`inbox_agent.db`) in VS Code, install the **SQLite Viewer** extension. The file is a database, not text, so VS Code can't open it on its own.
+12. Run `python check_mcp_server.py` to check the Gmail MCP server. To use it in Claude Desktop, add an `mcpServers` section to Claude Desktop's `claude_desktop_config.json`, keeping everything already in the file. The server's `command` is the full path to the project's Python (`.venv\Scripts\python.exe` on Windows, `.venv/bin/python` on a Mac), and its `args` is the full path to `gmail_mcp_server.py`. Then quit and reopen Claude Desktop. **Settings → Developer → Edit Config** shows where the file is. On a Mac, that's `~/Library/Application Support/Claude/`. On Windows, the Microsoft Store version of Claude keeps it in `%LOCALAPPDATA%\Claude-Data\<app folder>\`, not `%APPDATA%\Claude\` as many guides say.
 13. Build your profile: run `python style_builder.py collect`, check `style_source_emails.json`, then run `python style_builder.py write` (about $0.15). Read and edit `profile/writing_style.md`, and fill in `profile/about_me.md` (see `profile.example/`).
-14. Run `python drafter.py --search "from:someone@example.com"` to draft a reply to the newest matching email. Add `--note "what to say"` to tell it what you want, and `--save` to save the approved reply as a Gmail draft. Without `--save`, nothing changes in Gmail. A draft costs roughly $0.05 to $0.20. The Microsoft Store version of Claude keeps it in `%LOCALAPPDATA%\Claude-Data\<app folder>\`, not `%APPDATA%\Claude\` as many guides say. The file is a database, not text, so VS Code can't open it on its own.
-15. Get Tailwind's program, once per computer. In a browser, open github.com/tailwindlabs/tailwindcss/releases/tag/v4.3.3 and, under **Assets**, download `tailwindcss-windows-x64.exe` and `sha256sums.txt`. Create a `tools` folder in the project, move the program into it and rename it `tailwindcss.exe`. Then check that it's the genuine file: run `Get-FileHash tools\tailwindcss.exe` in PowerShell and compare the Hash with the line for `tailwindcss-windows-x64.exe` in `sha256sums.txt`. Only use the program if they're the same.
-16. Build the page's CSS with `tools\tailwindcss.exe -i web/tailwind.css -o web/static/app.css`. While editing templates, add `--watch` and leave it running in a second terminal, so the CSS is rebuilt every time a file is saved.
+14. Run `python drafter.py --search "from:someone@example.com"` to draft a reply to the newest matching email. Add `--note "what to say"` to tell it what you want, and `--save` to save the approved reply as a Gmail draft. Without `--save`, nothing changes in Gmail. A draft costs roughly $0.05 to $0.20.
+15. Get Tailwind's program, once per computer, from github.com/tailwindlabs/tailwindcss/releases/tag/v4.3.3. Each system has its own. Check that it's the genuine file by comparing its fingerprint with the one in the release's `sha256sums.txt`, and only use the program if they're the same.
+
+    On Windows, open that page in a browser and, under **Assets**, download `tailwindcss-windows-x64.exe` and `sha256sums.txt`. Create a `tools` folder in the project, move the program into it and rename it `tailwindcss.exe`. Then run `Get-FileHash tools\tailwindcss.exe` and compare the Hash with the line for `tailwindcss-windows-x64.exe` in `sha256sums.txt`.
+
+    On a Mac, download both with `curl`, because macOS can block a program downloaded in a browser. The last two commands each print a fingerprint to compare:
+    ```
+    mkdir -p tools
+    curl -fLo tools/tailwindcss https://github.com/tailwindlabs/tailwindcss/releases/download/v4.3.3/tailwindcss-macos-arm64
+    curl -fLo tools/sha256sums.txt https://github.com/tailwindlabs/tailwindcss/releases/download/v4.3.3/sha256sums.txt
+    shasum -a 256 tools/tailwindcss
+    grep tailwindcss-macos-arm64 tools/sha256sums.txt
+    ```
+    If they're the same, make the program runnable with `chmod +x tools/tailwindcss`.
+16. Build the page's CSS with `tools/tailwindcss -i web/tailwind.css -o web/static/app.css`. While editing templates, add `--watch` and leave it running in a second terminal, so the CSS is rebuilt every time a file is saved.
 17. Start the web page from the project folder with `python -m uvicorn web.app:app --reload`, then open http://127.0.0.1:8000 in a browser. Only this computer can open it. Stop it with Ctrl+C. When the page says Gmail needs you to sign in again, click **Sign in to Gmail** on it. The app only accepts the Google account its login was first made with, so to switch accounts on purpose, delete `token.json` first.

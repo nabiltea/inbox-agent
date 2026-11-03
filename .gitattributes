@@ -1,0 +1,3 @@
+# Every text file has Unix line endings (LF), in the repo and on every computer, whatever
+# that computer's own Git setting says. Git recognizes binary files, like the font, by itself.
+* text=auto eol=lf

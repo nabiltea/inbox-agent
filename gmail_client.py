@@ -11,6 +11,7 @@ there would break the conversation.
 
 import base64
 import html
+import os
 import re
 import secrets
 import sys
@@ -35,6 +36,11 @@ from oauthlib.oauth2 import OAuth2Error
 PROJECT_DIR = Path(__file__).parent
 CREDENTIALS_FILE = PROJECT_DIR / "credentials.json"  # identifies this app to Google
 TOKEN_FILE = PROJECT_DIR / "token.json"  # your saved login, created after the first sign-in
+
+# The project's own Python, which is in a different place on Windows and on a Mac. Messages
+# that give a command use this, so the command works on the computer showing it. Plain
+# "python" can be another Python altogether, like conda's.
+OWN_PYTHON = r".venv\Scripts\python" if os.name == "nt" else ".venv/bin/python"
 
 # What we ask Google permission to do. "gmail.modify" lets the app read emails,
 # create labels and change which labels an email has. It's the narrowest Google
@@ -89,7 +95,7 @@ class LabelRefusedError(RuntimeError):
 # The messages that go with the first three errors, wherever they're raised.
 _LOGIN_EXPIRED = (
     "The Gmail login has expired. Sign in again with the 'Sign in to Gmail' button on the web page, "
-    r"or run .venv\Scripts\python show_inbox.py in the project folder."
+    f"or run {OWN_PYTHON} show_inbox.py in the project folder."
 )
 _CANT_REACH_GOOGLE = "Couldn't reach Google. Check the internet connection."
 _GOOGLE_TEMPORARY = "Google has a temporary problem on its side. Try again in a few minutes."
@@ -167,7 +173,7 @@ def _google_refused(reason):
     """The message for when Google doesn't accept a sign-in. Signing in from a terminal is the way out."""
     return (
         f"Google didn't accept the sign-in ({reason}), so nothing was saved. Try again, or run "
-        r".venv\Scripts\python show_inbox.py in the project folder."
+        f"{OWN_PYTHON} show_inbox.py in the project folder."
     )
 
 

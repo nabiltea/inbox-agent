@@ -19,7 +19,7 @@ same Wi-Fi.
 
 The page's styles are in web/static/app.css, which Tailwind's program builds from
 the classes used in web/ (see web/tailwind.css). Build it with:
-  tools/tailwindcss.exe -i web/tailwind.css -o web/static/app.css
+  tools/tailwindcss -i web/tailwind.css -o web/static/app.css
 While editing templates, add --watch and leave it running in a second terminal: it
 rebuilds the CSS every time a file is saved. (A public site would add --minify.)
 """
@@ -46,6 +46,7 @@ from gmail_client import (
     GoogleTemporaryError,
     GoogleUnreachableError,
     LabelRefusedError,
+    OWN_PYTHON,
     SignInFailedError,
     SignInNeededError,
     finish_web_sign_in,
@@ -190,6 +191,9 @@ templates.env.filters["clean"] = labelling.clean
 # Lets the templates call gmail_link(...) from gmail_client.py directly, the way they
 # call url_for(...). The MCP server uses the same function, so both give the same links.
 templates.env.globals["gmail_link"] = gmail_link
+
+# For the terminal command on a run too big to undo on the page, so it works on this computer.
+templates.env.globals["own_python"] = OWN_PYTHON
 
 
 def check_inbox():
