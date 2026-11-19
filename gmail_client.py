@@ -16,11 +16,13 @@ import re
 import secrets
 import sys
 import time
+import unicodedata
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from email.message import EmailMessage
 from email.utils import formataddr, getaddresses, parseaddr
+from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urlencode, urlsplit
 
@@ -638,9 +640,6 @@ def _headers(message):
 # A web address in text, from http(s):// up to the next space, quote or bracket
 WEB_ADDRESS = re.compile(r"https?://[^\s<>\"')\]]+")
 
-# A link in HTML: <a ... href="address" ...>text</a>
-LINK_TAG = re.compile(r"""<a\s[^>]*?href=["']([^"']+)["'][^>]*>(.*?)</a>""", re.S | re.I)
-
 
 def _site(address):
     """Just the site of a web address, like "links.dropbox.com" for a long tracking link."""
@@ -653,11 +652,16 @@ def _sites_only(text):
 
 
 def _extract_body(payload, link_hosts=False):
-    """Find the readable text of an email: plain text if there is any, otherwise HTML with the tags removed.
+    """Find the readable text of an email: the HTML version, as Gmail shows it, or else the plain text.
 
     An email is a tree of parts (plain text, HTML, attachments, parts inside parts),
-    so this walks the whole tree. With link_hosts, web addresses become just their
-    site (see get_message), including the links that removing HTML tags would drop.
+    so this walks the whole tree. Many emails come in two versions that are meant to
+    say the same thing: HTML, which Gmail shows me, and plain text, for email apps that
+    can't show HTML. They don't always agree. A plain-text version can be a stub that
+    only says "view this email online", or a template with sections for other people,
+    and the agent then reads something I never see. So the HTML version wins, and the
+    plain text is only used when there's no HTML, or when the HTML has no text at all.
+    With link_hosts, web addresses become just their site (see get_message).
     """
     plain, html_parts = [], []
 
@@ -671,20 +675,128 @@ def _extract_body(payload, link_hosts=False):
             walk(child)
 
     walk(payload)
-    if plain:
-        text = "\n".join(plain).strip()
-        return _sites_only(text) if link_hosts else text
-    text = "\n".join(html_parts)
-    text = re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", text, flags=re.S | re.I)  # drop code and styling
-    if link_hosts:  # note each link's site next to its text, before the tags (and the addresses) go
-        text = LINK_TAG.sub(
-            lambda m: f"{m.group(2)} [link: {_site(m.group(1))}]" if m.group(1).startswith("http") else m.group(2), text
-        )
-    text = re.sub(r"<br\s*/?>|</p>|</div>|</tr>", "\n", text, flags=re.I)  # keep line breaks
-    text = html.unescape(re.sub(r"<[^>]+>", " ", text))  # drop the remaining tags
-    text = re.sub(r"[ \t]+", " ", text)
-    text = re.sub(r"\s*\n\s*", "\n", text).strip()
+    if html_parts:
+        reader = _ShownText(link_hosts)
+        reader.feed("\n".join(html_parts))
+        text = reader.text()
+        if WORDS.search(text):
+            return _sites_only(text) if link_hosts else text
+    text = "\n".join(plain).strip()
     return _sites_only(text) if link_hosts else text
+
+
+# At least one letter or digit: how _extract_body tells whether the HTML had any text.
+WORDS = re.compile(r"[^\W_]")
+
+# How HTML lays text out. A block, like a paragraph, starts on a line of its own, and a
+# table cell ends with a space, so cells in a row read like "Status  Shipped".
+_BLOCK_TAGS = {
+    "address", "article", "aside", "blockquote", "dd", "div", "dl", "dt", "footer", "form", "h1", "h2", "h3", "h4",
+    "h5", "h6", "header", "li", "main", "nav", "ol", "p", "pre", "section", "table", "tr", "ul",
+}
+_CELL_TAGS = {"td", "th"}
+# Elements with no end tag and no text inside. <br> and <hr> still start a new line.
+_VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
+# Never read: the email's styling and code, and the page title, which Gmail doesn't show.
+_UNREAD_TAGS = {"script", "style", "title"}
+# A new one of these closes the one that's open, as in browsers: <p>one<p>two is two paragraphs.
+_CLOSED_BY_NEXT = {"dd", "dt", "li", "p", "td", "th", "tr"}
+# The one way of hiding that's certain: display:none hides an element and everything inside it.
+# Other tricks, like a font size of 0, are also used on wrappers whose content shows normally.
+_HIDDEN_STYLE = re.compile(r"display\s*:\s*none", re.I)
+# Characters that take up no space but aren't format characters: email templates pad their
+# preview line with them. (Format characters, like zero-width spaces, are caught by category.)
+_PADDING = {"\u034f", "\u115f", "\u1160", "\u3164", "\uffa0"}
+
+
+def _without_invisible(text):
+    """Text without invisible characters, which can also make text display backwards."""
+    return "".join(ch for ch in text if ch not in _PADDING and unicodedata.category(ch) != "Cf")
+
+
+class _ShownText(HTMLParser):
+    """The text an HTML email shows, the way Gmail shows it, without its hidden parts.
+
+    It reads the HTML one tag at a time and keeps track of which elements are open, so it
+    knows whether a piece of text sits inside a hidden one. Quoted earlier messages, inside
+    <blockquote>, get "> " in front of each line, as in a plain-text email.
+    """
+
+    def __init__(self, link_hosts=False):
+        super().__init__(convert_charrefs=True)  # turns &amp; and the like into the characters
+        self.link_hosts = link_hosts
+        self.open = []  # (tag, whether it hides its content, link address) for each open element
+        self.hidden = 0  # how many of the open elements hide what's inside them
+        self.quotes = 0  # how many quotes we're inside
+        self.lines = [[0, ""]]  # [how deep in quotes, text] for each line
+
+    def _new_line(self):
+        if self.lines[-1][1].strip():
+            self.lines.append([self.quotes, ""])
+
+    def _write(self, text):
+        if self.hidden:
+            return
+        line = self.lines[-1]
+        if not line[1].strip():  # a line is as deep in quotes as its first text
+            line[0] = self.quotes
+        line[1] += text
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        if tag in _VOID_TAGS:
+            if tag in ("br", "hr") and not self.hidden:
+                self._new_line()
+            return
+        if tag in _CLOSED_BY_NEXT and self.open and self.open[-1][0] == tag:
+            self.handle_endtag(tag)
+        hides = tag in _UNREAD_TAGS or "hidden" in attrs or bool(_HIDDEN_STYLE.search(attrs.get("style") or ""))
+        if tag in _BLOCK_TAGS and not self.hidden:
+            self._new_line()
+        self.open.append((tag, hides, attrs.get("href") or ""))
+        self.hidden += hides
+        self.quotes += tag == "blockquote"
+
+    def handle_endtag(self, tag):
+        if tag in _VOID_TAGS:
+            return
+        starts = [i for i, (name, _, _) in enumerate(self.open) if name == tag]
+        if starts:  # an end tag that was never opened is ignored, as browsers do
+            self._close_from(starts[-1])
+
+    def _close_from(self, start):
+        """Close the open element at this position, and anything left open inside it, innermost first."""
+        for name, hides, href in reversed(self.open[start:]):
+            if name == "a" and self.link_hosts and href.startswith("http"):
+                self._write(f" [link: {_site(href)}]")  # where the link goes, after its text
+            self.hidden -= hides
+            self.quotes -= name == "blockquote"
+            if name in _BLOCK_TAGS and not self.hidden:
+                self._new_line()
+            elif name in _CELL_TAGS:
+                self._write(" ")
+        del self.open[start:]
+
+    def handle_data(self, data):
+        if any(name == "pre" for name, _, _ in self.open):  # preformatted: its line breaks count
+            first, *rest = data.split("\n")
+            self._write(first)
+            for line in rest:
+                self._new_line()
+                self._write(line)
+        else:
+            self._write(re.sub(r"\s+", " ", data))  # in HTML, any run of spaces and line breaks is one space
+
+    def text(self):
+        """The text, once all the HTML has been fed in."""
+        self.close()
+        self._close_from(0)  # elements never closed, like a missing </a>
+        lines = []
+        for depth, line in self.lines:
+            line = re.sub(r"[ \t\u00a0]+", " ", _without_invisible(line)).strip()
+            if line:
+                lines.append("> " * depth + line if depth else line)
+        return "\n".join(lines)
 
 
 def _decode(data):

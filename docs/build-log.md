@@ -1129,6 +1129,55 @@ The History page's undo was the safety net I'd waited for before pressing the pa
   - **The reader can follow text I never see.** One to-do told me to bring documents meant for a different kind of passenger. My code reads an email's plain-text version whenever there is one, and this sender's plain text was a template with a section for every kind of passenger. None of those sections were in the HTML version that I saw. So the full read faithfully followed instructions that weren't meant for me. The fix comes next: read the HTML version when there is one, without its hidden parts.
   - **There's no way to clear a to-do on the page.** For now I archive the email in Gmail. Two buttons come after the reader fix: Done, and Not needed, which also records that Claude was wrong.
 
+### Reading the version of an email I see
+
+The real checks found a to-do built from text I never saw. Emails often come as two versions: HTML, which Gmail shows, and plain text, for apps that can't show HTML. The reader took the plain text whenever there was one.
+
+- **Looked first, before deciding (free and read-only):** of the 81 emails on my to-do list, 69 had both versions.
+  - In about 65, both said the same thing, apart from buttons and footers.
+  - In 3, the plain text was worse. Twice it was only a stub saying "view this email online", so the reader saw no content at all, and said so in its reason. Once it was the template with sections for other kinds of passengers.
+  - The plain text was never the better one.
+- **Decided:**
+  - **Read the HTML version when there is one,** and the plain text only when there's no HTML or the HTML has no text at all.
+  - **Leave out only what's certainly hidden:** elements styled `display:none` or marked `hidden`, plus the styling, code and page title. My first rule also counted tricks like a font size of 0. On one email, that hid almost the whole message, because templates use those tricks on wrappers whose content shows normally. Leaving hidden text out matters for safety too: it's a known way of slipping instructions to an AI that people can't see.
+  - **Quoted earlier messages get "> " at the start of each line,** as in a plain-text email, so `strip_quoted()` still cuts them off for the Drafter.
+  - **Invisible characters come out of the HTML text,** like the padding templates put after their preview line.
+  - **No re-sorting.** The saved full reads stay as they are, and new emails get the new text.
+- **Built:**
+  - In `gmail_client.py`, `_extract_body()` prefers the HTML version.
+  - `_ShownText` reads HTML one tag at a time and keeps track of which elements are open, so it knows whether a piece of text sits inside a hidden one. It replaces the old way of removing tags with patterns.
+  - The full read, Claude Desktop's `read_thread` and the Drafter all use it.
+- **Learned:**
+  - **Python comes with an HTML parser** (`html.parser`). It reads tags one at a time and calls my code for each start tag, end tag and piece of text.
+  - **Real HTML is often broken:** tags never closed, and end tags never opened. Browsers have rules for this, like a new paragraph closing the open one. Without that rule, a hidden paragraph that's never closed would hide everything after it.
+  - **Whether something is hidden can depend on more than the element itself.** A child can undo its parent's font size, and a stylesheet can show a part that the HTML hides. So I only trusted the one rule a child can't undo.
+  - **An editing tool can write an invisible character where I meant its code,** like ` `. A test that compared the exact text found it, and the code now only uses the readable codes.
+- **Result:**
+  - **42 tests with made-up emails:**
+    - the template and stub cases, and every kind of hidden part;
+    - a tiny-font wrapper whose text stays visible;
+    - links with their site, tables, line breaks and broken HTML;
+    - invisible and backwards-making characters, other alphabets and emoji;
+    - quoted replies;
+    - `get_message()` and `get_thread()`, with a stand-in for Gmail.
+
+    Emails without HTML read exactly as the committed code reads them.
+  - **Breaking the code on purpose:** 8 breaks each made tests fail. One didn't at first, so I added a test for it: a hidden paragraph has to end where the next one starts.
+  - **On my real emails, read-only:**
+    - 77 of my 81 to-do emails read differently, and none came out empty.
+    - The template's extra sections and all 802 invisible padding characters are gone.
+    - The two stubs went from about 23 words to more than 100.
+    - The text is 73% longer in total, mostly footers.
+    - My 15 newest sent emails still give the Drafter the same words.
+  - **8 full reads with the new text, as a dry run that saved nothing, for $0.03:**
+    - 4 came back with the same answer.
+    - One of the stub emails now got concrete steps, and noticed that its deadline had passed while the event itself hadn't.
+    - The other stub email and a bank notice were cleared as needing nothing.
+    - The email with the template sections became a plain booking confirmation, which needs nothing.
+- **Found:**
+  - **It isn't perfect.** The reader doesn't look at stylesheets, so a part that only a stylesheet hides or shows, like a separate phone version, is read the way the HTML has it.
+  - **Booking confirmations need nothing, as far as the reader is concerned,** even for a trip coming up soon. Keeping upcoming trips or events on the list as reminders would be a change to the reader's rules, separate from this fix.
+
 ## What's left
 
 - [x] **Step 1:** First call to Claude
@@ -1197,7 +1246,7 @@ The History page's undo was the safety net I'd waited for before pressing the pa
   - [x] sort 3 emails with `triage.py 3 --apply`, and undo that run on the page, to prove the safety net works
   - [x] another fresh backup, then press Sort for the first time
 - [ ] Find out why Gmail refused part of a request for 45 emails at once, at email 37, and whether the code needs to wait a full minute (the first real Sort fetched 229 without a pause)
-- [ ] The reader reads the version of an email I see: the HTML version when there is one, without its hidden parts, rather than a plain-text version that can say other things
+- [x] The reader reads the version of an email I see: the HTML version when there is one, without its hidden parts, rather than a plain-text version that can say other things
 - [ ] Buttons to clear a to-do on the page: Done, and Not needed, which also records that Claude was wrong. Each archives every conversation in its row, with an Undo. They're protected like every other button, by the protection against other websites that piece 3 added
 - [ ] **Step 7, piece 6:** the draft flow: "Draft reply" with a hints box, the Critic's verdict, and saving to Gmail drafts, also when the Critic isn't satisfied
 - [ ] A double-click shortcut that starts the web page, so opening it doesn't need VS Code
