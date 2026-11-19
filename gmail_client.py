@@ -498,7 +498,7 @@ def build_reply(messages, my_address, body, reply_all=False):
     reply["To"] = to
     reply["Subject"] = subject
     if reply_all:
-        # getaddresses splits header text like '"Ann" <ann@x.com>, bob@y.com' into (name, address) pairs.
+        # getaddresses splits header text like '"Ann" <ann@example.com>, bob@example.org' into (name, address) pairs.
         others = getaddresses([headers.get("to", ""), headers.get("cc", "")])
         skip = {my_address.lower()} | {address.lower() for _, address in getaddresses([to])}
         cc = [formataddr((name, address)) for name, address in others if address and address.lower() not in skip]

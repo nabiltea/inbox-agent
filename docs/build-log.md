@@ -1068,6 +1068,43 @@ Early commits held real details from my emails, like names and a booking code, e
 - **Result:** 39 old lines changed, across 21 commits. A script compared every file in every commit: the only differences are those lines, the 40 commits keep their messages and dates, and the newest files are identical byte for byte. The same checks fail on the old history, as they should.
 - **Found:** this only protects the repo from now on. A copy made while the old history was public would still have those details, so the real fix is keeping them out from the first commit.
 
+### A check before every commit
+
+Now that the repo is public, every commit is public as soon as I push it. A real detail slipped into a commit once before, so instead of relying on reading everything myself, Git now checks each commit for me.
+
+- **Decided:**
+  - **Keep working in the public repo, with an automatic check.** The other option was a private repo that publishes to the public one. But a commit stays on my computer until I push it, so the step between committing and pushing is already private, and the check catches a slip there. A second repo would mean keeping two copies in step, and it's mostly a company pattern, like releasing internal code as open source.
+  - **The check runs as two Git hooks,** scripts Git runs by itself at set moments: `pre-commit` on what's about to be committed, and `commit-msg` on the message. VS Code's Commit button runs them too.
+  - **The script is public and the words are private.** `check_private.py` holds nothing private, so it's in the repo for anyone to reuse. My word list lives in `.claude/`, which Git ignores.
+  - **It learns from my own data, not only from a list I keep.** A list only knows what I remembered to put on it. So the check also reads the senders in the agent's log, codes in email subjects (words with letters and digits), and the names in my labels and about-me files, and refuses any of those words that isn't in the repo yet. Words the repo already has, like LinkedIn or plain English, pass.
+  - **Only new lines count,** so a commit that takes a detail out isn't refused for it.
+  - **I push only once a piece has been checked.**
+- **Built:**
+  - `check_private.py`: `install` adds the two hooks, `changes` checks everything not committed yet, and `all` checks every file and commit message already committed.
+  - The private list, `.claude/private-words.txt`, started from what the history cleaning took out. `.claude/public-words.txt` holds the false alarms I've checked.
+  - In `gmail_client.py`, a comment's example email addresses moved to example.com, which is reserved for examples. They were on two real domains, which the first check of the repo found.
+- **Learned:**
+  - **Git hooks** are scripts in `.git/hooks/` that Git runs at set moments, and a failing one stops the commit. `git clone` doesn't copy them, so each copy of the repo installs them once.
+  - **A hook is a safety net, not a lock:** `git commit --no-verify` skips it. It's there to catch mistakes.
+  - **Git only drops lines starting with `#` from a commit message when it opens an editor for it.** With `-m` or `-F`, which is how VS Code passes a message, they're kept. My first version skipped those lines, and a test caught it.
+  - **A diff's hunk header** ("@@ -12,3 +12,4 @@") says how many lines follow. That's how to tell an added line that starts with "++" apart from a file's header line.
+- **Result:**
+  - **61 tests in a throwaway copy of the repo, with made-up data and real commits through the real hooks:**
+    - Refused, naming the file and line: a private word in a line, a file name or the message. Capitals, accents and extra spaces don't hide a word, and a longer word that contains one doesn't count.
+    - Also refused: codes, API keys, Google secrets, real email addresses and ignored files added by force. A secret itself is never printed.
+    - Passed: removing a detail, example addresses, and words already public. A picture passes with a reminder to check it myself.
+    - Only what's staged counts, also with `commit -a`.
+    - Without the log, the rest still works, and it says what it couldn't check.
+  - **Breaking the code on purpose:** 7 different breaks each made tests fail.
+  - **On the real repo:**
+    - Checking everything already public found no private details. It flagged two service names on my starting list, which the prompts use as plain examples, so I took them off the list, and the two example addresses.
+    - Replaying my last 15 commits as if the check had existed gave 7 hits. All were ordinary words that happened to be in a sender's name or my labels file, like "team" and "room", so no real detail was left in the cleaned history.
+    - Reading only the words with a capital from my labels and about-me files removed 2 of those hits and halved the words the labels file adds, without losing a name.
+  - A commit takes about 2 seconds longer.
+- **Found:**
+  - **False alarms are the price of learning from my data.** More than a thousand words from my senders, subjects and files aren't in the repo yet, and some are ordinary words. Each alarm costs one line in the false-alarm list, and every committed word becomes part of the public repo, so alarms get rarer over time.
+  - **What it can't do:** read pictures, so screenshots still only use made-up emails, or know a detail that's in none of my data.
+
 ## What's left
 
 - [x] **Step 1:** First call to Claude
@@ -1145,6 +1182,7 @@ Early commits held real details from my emails, like names and a booking code, e
 - [ ] Demo mode with made-up emails, safe to show in interviews and maybe online, together with using the project on both my PC and my laptop (a "To do" Gmail label, with Gmail as the source of truth)
 - [x] A short README with screenshots, with the long text in `docs/`
 - [x] Clean real details out of the Git history, in a new repo that can be public
+- [x] A check before every commit that refuses my private details, using a private word list and my own data
 - [ ] **Step 8:** accuracy tests (evals) and a demo video
 - [ ] **Cost:** try prompt caching for triage's system prompt, which is the same for every email
 
