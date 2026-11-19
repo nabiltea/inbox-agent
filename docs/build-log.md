@@ -1105,6 +1105,30 @@ Now that the repo is public, every commit is public as soon as I push it. A real
   - **False alarms are the price of learning from my data.** More than a thousand words from my senders, subjects and files aren't in the repo yet, and some are ordinary words. Each alarm costs one line in the false-alarm list, and every committed word becomes part of the public repo, so alarms get rarer over time.
   - **What it can't do:** read pictures, so screenshots still only use made-up emails, or know a detail that's in none of my data.
 
+### The real checks
+
+The History page's undo was the safety net I'd waited for before pressing the page's buttons on my real inbox. With it built, I pressed each button that changes Gmail once and undid it, then compared the log with a backup, in the order planned in piece 5.
+
+- **First:**
+  - **A new Claude API key.** The old one had expired, and an expired key can only be deleted, so I made a new one, scoped to a workspace. A free request that lists Claude's models, then one tiny request to Claude Haiku for $0.000004, proved it works.
+  - **Signing in to Gmail again,** with the page's button. Google ends the login every 7 days while the app is in testing, and mine had run out while I was away.
+  - **A backup of the log and `labels.json`,** made with SQLite's backup tool, which only reads the real log. The copy had the same rows and passed SQLite's integrity check. I made another one just before the first press of Sort.
+- **Result:**
+  - **Open in Gmail on an archived email** opened the right conversation in my main account, although the link says `#inbox`. Google doesn't document these links, so that was an open question.
+  - **Moving an Unsorted email and changing another email's label, each undone:** Gmail showed each change. Afterwards every email's row in the log was identical to the backup, and both changes were kept, marked undone.
+  - **Rejecting a suggestion, undone:** nothing changed in Gmail, as planned, and the email came back onto the Unsorted page.
+  - **A real new label, undone:** Gmail kept its name exactly as typed, mixed capitals included, which answers the question piece 4 left open. Undoing took it out of `labels.json`, which then matched its backup byte for byte, and left the label in Gmail, empty, as designed.
+  - **Needs action on an archived email, undone:** it went back into my inbox and onto Action needed, and out again.
+  - **Sorting 3 emails with `triage.py 3 --apply`, then undoing that run on the History page:** the log matched the backup again. The run, its emails and their full reads were gone, and my earlier changes were untouched.
+  - **The first press of Sort:** 229 emails from 3½ weeks away, in about 12 minutes (3.2 seconds each), for $0.25: $0.11 for the first looks and $0.14 for 131 full reads, 11 of them reviewed by Sonnet. 208 were archived and 21 stayed as to-dos, with none in Unsorted. The 6,588 older emails stayed exactly as they were.
+  - Gmail's per-minute limit didn't come up: sorting never paused.
+- **Learned:**
+  - **A safety net only counts once it has caught something real.** Every undo here ran on real Gmail, and the proof was the log compared with a backup row by row, not how the page looked.
+  - **An email is often two versions in one message:** HTML, which Gmail shows, and plain text, for apps that can't show HTML (together they're "multipart/alternative"). They're meant to say the same thing, but nothing makes the sender keep them in step.
+- **Found:**
+  - **The reader can follow text I never see.** One to-do told me to bring documents meant for a different kind of passenger. My code reads an email's plain-text version whenever there is one, and this sender's plain text was a template with a section for every kind of passenger. None of those sections were in the HTML version that I saw. So the full read faithfully followed instructions that weren't meant for me. The fix comes next: read the HTML version when there is one, without its hidden parts.
+  - **There's no way to clear a to-do on the page.** For now I archive the email in Gmail. Two buttons come after the reader fix: Done, and Not needed, which also records that Claude was wrong.
+
 ## What's left
 
 - [x] **Step 1:** First call to Claude
@@ -1164,17 +1188,18 @@ Now that the repo is public, every commit is public as soon as I push it. A real
   - [x] part 6: undoing a whole run from the page, sharing `undo.py`'s logic
 - [x] Get the repo ready for a Mac: the app, Setup and packages work on both systems
 - [ ] Move to my MacBook, if I still want to when I'm back. It needs a small tool for carrying the private files, and Setup's Mac commands still have to run on a real Mac
-- [ ] Once the History page is up, the real checks, in this order, with a fresh backup first:
-  - [ ] click Open in Gmail on an archived email, which changes nothing
-  - [ ] move one real email and change one real label, and undo each
-  - [ ] reject one email and undo it
-  - [ ] add one real label, which shows how Gmail treats capitals, and undo it
-  - [ ] "Needs action" on one archived email, and undo it
-  - [ ] sort 3 emails with `triage.py 3 --apply`, and undo that run on the page, to prove the safety net works
-  - [ ] another fresh backup, then press Sort for the first time
-- [ ] Find out why Gmail refused part of a request for 45 emails at once, at email 37, and whether the code needs to wait a full minute
+- [x] Once the History page is up, the real checks, in this order, with a fresh backup first:
+  - [x] click Open in Gmail on an archived email, which changes nothing
+  - [x] move one real email and change one real label, and undo each
+  - [x] reject one email and undo it
+  - [x] add one real label, which shows how Gmail treats capitals, and undo it
+  - [x] "Needs action" on one archived email, and undo it
+  - [x] sort 3 emails with `triage.py 3 --apply`, and undo that run on the page, to prove the safety net works
+  - [x] another fresh backup, then press Sort for the first time
+- [ ] Find out why Gmail refused part of a request for 45 emails at once, at email 37, and whether the code needs to wait a full minute (the first real Sort fetched 229 without a pause)
+- [ ] The reader reads the version of an email I see: the HTML version when there is one, without its hidden parts, rather than a plain-text version that can say other things
+- [ ] Buttons to clear a to-do on the page: Done, and Not needed, which also records that Claude was wrong. Each archives every conversation in its row, with an Undo. They're protected like every other button, by the protection against other websites that piece 3 added
 - [ ] **Step 7, piece 6:** the draft flow: "Draft reply" with a hints box, the Critic's verdict, and saving to Gmail drafts, also when the Critic isn't satisfied
-- [ ] An archive button for to-dos on the page, so I can clear the overdue ones there instead of in Gmail. A row can hold several conversations, so one click should archive them all. It's protected like every other button, by the protection against other websites that piece 3 added
 - [ ] A double-click shortcut that starts the web page, so opening it doesn't need VS Code
 - [ ] Decide whether to move the Google app from "Testing" to "In production", which would end the weekly sign-in (first check Google's rules for unverified apps that use Gmail)
 - [ ] Reorganize the project into folders, as its own step after Step 7, with one setting for where the data files live
