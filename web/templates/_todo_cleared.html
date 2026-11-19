@@ -1,0 +1,25 @@
+{# What a to-do's row says after Done or Not needed, with the way back, and the new count beside the
+   heading. The Undo button sends back the rows in the log that the click made, and which row this is,
+   so a problem can show here. Everything here is escaped, as on every page (see app.py). #}
+{% set button_style = "rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-800 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50" %}
+{% if cleared %}
+<li class="px-5 py-3">
+  <p class="text-sm text-gray-700" role="status">
+    {% if cleared.not_needed %}Not needed{% else %}Done{% endif %}: “{{ cleared.subject }}”
+    {% if cleared.emails == 1 %}It left your inbox{% else %}Its {{ cleared.emails }} emails left your inbox{% endif %}{% if cleared.not_needed %}, and Claude's mistake is noted{% endif %}.
+  </p>
+  <form class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1" hx-post="{{ url_for('undo_todo').path }}"
+        hx-target="closest li" hx-swap="outerHTML" hx-disabled-elt="find button">
+    {% for change_id in cleared.change_ids %}
+      <input type="hidden" name="change_id" value="{{ change_id }}">
+    {% endfor %}
+    <input type="hidden" name="row" value="{{ row_id }}">
+    <button type="submit" class="{{ button_style }}">Undo</button>
+    <span class="text-sm text-gray-500">You can also undo this on the History page.</span>
+  </form>
+  <p id="problem-{{ row_id }}" class="empty:hidden"></p>
+</li>
+{% else %}
+<li class="px-5 py-3 text-sm text-gray-600" role="status">This to-do isn't on your list any more.</li>
+{% endif %}
+{% with oob = True %}{% include "_todo_count.html" %}{% endwith %}

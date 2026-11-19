@@ -1,6 +1,5 @@
 {# The Action needed page. It fills the slots in base.html, which draws the rest. #}
 {% extends "base.html" %}
-{% from "_macros.html" import open_in_gmail, tag %}
 
 {% block title %}Action needed · {% endblock %}
 
@@ -10,114 +9,17 @@
 {% endblock %}
 
 {% block content %}
-  {# The word on the tag for each kind of to-do the full read can find (KINDS in full_read.py) #}
-  {% set kind_tags = {
-    "reply by email": "Reply", "reply on another site": "Reply", "sign or fill in a form": "Sign", "pay": "Pay",
-    "verify an account": "Verify", "attend something": "Attend", "answer an invitation": "Invitation", "other": "Action",
-  } %}
-
   <div class="flex items-baseline gap-3">
     <h1 class="text-2xl font-semibold">Action needed</h1>
-    {% if todos %}
-      <span class="text-sm text-gray-600">
-        {{ todos|length }} {{ "to-do" if todos|length == 1 else "to-dos" }}
-        {% if urgent %}· <span class="font-medium text-red-700">{{ urgent }} urgent</span>{% endif %}
-        {% if overdue %}· {{ overdue }} overdue{% endif %}
-      </span>
-    {% endif %}
+    {% include "_todo_count.html" %}
   </div>
 
   {% if todos %}
-    {# One row per task, most pressing first. todos.py has already worked out what each row
-       says and the order; the page only decides how things look (the tags here, and
-       show_date and show_deadline in app.py). #}
+    {# One row per task, most pressing first (see todos.py). Each row is a template of its own,
+       _todo_row.html, so Undo can draw one row again by itself. #}
     <ul class="mt-4 divide-y divide-gray-200 rounded-lg bg-white shadow-sm">
       {% for todo in todos %}
-        {# flex-wrap lets the Gmail link take a line of its own, under the rest of the row #}
-        <li class="flex flex-wrap items-start gap-x-4 gap-y-1 px-5 py-4">
-          {# How pressing it is, then what kind of to-do. A normal to-do has no tag for how pressing
-             it is. An email with no full read has no kind, so it keeps triage's Action and Reply. #}
-          <div class="flex w-24 shrink-0 flex-col items-start gap-1">
-            {% if todo.urgency == "urgent" %}
-              {{ tag("Urgent", "bg-red-100 text-red-800") }}
-            {% elif todo.urgency == "time-sensitive" %}
-              {{ tag("Time-sensitive", "border border-red-400 text-red-700") }}
-            {% elif todo.urgency == "overdue" %}
-              {{ tag("Overdue", "bg-gray-200 text-gray-700") }}
-            {% endif %}
-            {% if todo.kind %}
-              {{ tag(kind_tags.get(todo.kind, "Action"), "bg-blue-100 text-blue-800" if todo.needs_reply else "bg-amber-100 text-amber-800") }}
-            {% else %}
-              {% if todo.needs_action %}{{ tag("Action", "bg-amber-100 text-amber-800") }}{% endif %}
-              {% if todo.needs_reply %}{{ tag("Reply", "bg-blue-100 text-blue-800") }}{% endif %}
-            {% endif %}
-          </div>
-          <div class="min-w-0 flex-1">
-            <p class="font-medium">{{ todo.what_to_do }}</p>
-            {# When and where. The place is plain text, never a link: it comes from an email, and
-               links in emails can be phishing. "Open in Gmail" is the way to the real link. #}
-            {% if todo.deadline or todo.place %}
-              <p class="mt-0.5 text-sm">
-                {% if todo.deadline %}{{ todo.deadline|show_deadline }}{% endif %}
-                {% if todo.deadline and todo.place %}·{% endif %}
-                {% if todo.place %}{{ todo.place }}{% endif %}
-              </p>
-            {% endif %}
-            <p class="mt-0.5 text-sm text-gray-500">
-              {{ todo.sender }} · {% if todo.subject != todo.what_to_do %}{{ todo.subject }} · {% endif %}{{ todo.received|show_date }} · {{ todo.label }}
-              {% if todo.more %}
-                · <span class="text-blue-600">+{{ todo.more }} more {{ "email" if todo.more == 1 else "emails" }}</span>
-              {% endif %}
-              {% if todo.marked %}· You added this on the History page{% endif %}
-            </p>
-            {# <details> is a fold the browser handles by itself, with no JavaScript: clicking
-               the <summary> line opens and closes the rest. #}
-            {% if todo.steps or todo.why %}
-              <details class="mt-1 text-sm">
-                <summary class="cursor-pointer text-gray-600 hover:text-gray-900">
-                  {% if todo.steps %}
-                    {{ todo.steps|length }} {{ "step" if todo.steps|length == 1 else "steps" }} and why
-                  {% else %}
-                    Why
-                  {% endif %}
-                  {% if todo.others %}
-                    · {{ todo.others|length }} more {{ "conversation" if todo.others|length == 1 else "conversations" }}
-                  {% endif %}
-                </summary>
-                {% if todo.steps %}
-                  <ol class="mt-1 list-decimal space-y-0.5 pl-5">
-                    {% for step in todo.steps %}
-                      <li>{{ step }}</li>
-                    {% endfor %}
-                  </ol>
-                {% endif %}
-                {% if todo.why %}
-                  <p class="mt-1 text-gray-600">Why: {{ todo.why }}</p>
-                {% endif %}
-                {# The task's other conversations. It stays on the list until all of them are
-                   archived, so each one gets its own way to Gmail. #}
-                {% if todo.others %}
-                  <div class="mt-2 border-t border-gray-200 pt-2">
-                    <p class="text-gray-600">Also about this</p>
-                    <ul class="mt-1 space-y-0.5">
-                      {% for other in todo.others %}
-                        <li>
-                          {{ other.received|show_date }} · {{ other.what_to_do }}
-                          {% if gmail_address %}· {{ open_in_gmail(other.thread_id, gmail_address) }}{% endif %}
-                        </li>
-                      {% endfor %}
-                    </ul>
-                  </div>
-                {% endif %}
-              </details>
-            {% endif %}
-          </div>
-          {# Without a known account there's no link, rather than one that opens the wrong account.
-             w-full gives the link a line of its own, starting at the row's left edge. #}
-          {% if gmail_address %}
-            <div class="w-full">{{ open_in_gmail(todo.thread_id, gmail_address) }}</div>
-          {% endif %}
-        </li>
+        {% include "_todo_row.html" %}
       {% endfor %}
     </ul>
   {% else %}

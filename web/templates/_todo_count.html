@@ -1,0 +1,9 @@
+{# How many to-dos there are, beside the heading on Action needed. It's always there, empty when the
+   list is, so a click's answer can replace it ("out of band", with oob set) after a row has changed. #}
+<span id="todo-count" class="text-sm text-gray-600"{% if oob %} hx-swap-oob="true"{% endif %}>
+  {% if count %}
+    {{ count }} {{ "to-do" if count == 1 else "to-dos" }}
+    {% if urgent %}· <span class="font-medium text-red-700">{{ urgent }} urgent</span>{% endif %}
+    {% if overdue %}· {{ overdue }} overdue{% endif %}
+  {% endif %}
+</span>

@@ -163,6 +163,10 @@ def what_i_did(change):
     """One of my changes from the log, in a sentence for its row on the History page."""
     if change["action"] == "needs_action":
         return "Marked as needing action, and put back in your inbox." if change["entered_inbox"] else "Marked as needing action."
+    if change["action"] == "done":
+        return "Marked as done on Action needed, and it left your inbox."
+    if change["action"] == "not_needed":
+        return "Marked as not needed on Action needed, so Claude was wrong to list it, and it left your inbox."
     if change["action"] == "rejected":
         text = "Rejected: no label needed"
     elif change["label_created"]:
@@ -283,14 +287,84 @@ def action_needed(request: Request):
         context={  # the values the template can use
             "active": "action_needed",
             "todos": todos,
-            "urgent": sum(todo.urgency == "urgent" for todo in todos),
-            "overdue": sum(todo.urgency == "overdue" for todo in todos),
+            **todo_numbers(todos),  # count, urgent and overdue, for beside the heading
             # For the "Open in Gmail" links: read from the saved login, so no request to Gmail.
             # The links work even when the app can't reach Gmail: Chrome has its own sign-in.
             "gmail_address": saved_account(),
             "gmail_problem": gmail_problem,  # None, or why Gmail couldn't be checked
             "message": _waiting.pop("message", None),  # shown once, after signing in
         },
+    )
+
+
+def todo_numbers(todos):
+    """How many to-dos there are, and how many are urgent and overdue, for beside Action needed's heading."""
+    return {
+        "count": len(todos),
+        "urgent": sum(todo.urgency == "urgent" for todo in todos),
+        "overdue": sum(todo.urgency == "overdue" for todo in todos),
+    }
+
+
+def todos_now():
+    """The to-do list as it is right now, after a click on Action needed: one more question to Gmail."""
+    inbox_ids, _ = check_inbox()
+    with closing(database.connect()) as conn:
+        return list_todos(database.flagged_emails(conn), inbox_ids)
+
+
+# The buttons on a to-do's row. The form sends every email the row stands for (see _todo_row.html).
+@app.post("/action-needed/done")
+def todo_done(request: Request, message_id: Annotated[list[str] | None, Form()] = None):
+    """Take a to-do off my list because I've dealt with it, and show what happened in its row."""
+    return clear_row(request, message_id or [], not_needed=False)
+
+
+@app.post("/action-needed/not-needed")
+def todo_not_needed(request: Request, message_id: Annotated[list[str] | None, Form()] = None):
+    """Take a to-do off my list because it never needed me, which records that Claude was wrong."""
+    return clear_row(request, message_id or [], not_needed=True)
+
+
+def clear_row(request, message_ids, not_needed):
+    """Carry out Done or Not needed, and answer with what the row should say and the new count."""
+    row_id = f"todo-{message_ids[0]}" if message_ids else "todo"
+    cleared, problem = attempt(
+        request, row_id, lambda: labelling.clear_todo(message_ids, not_needed), not_done="Not cleared",
+        after_failure="Nothing was recorded, so pressing the button again finishes the job.",
+    )
+    if problem:
+        return problem
+    return templates.TemplateResponse(
+        request=request,
+        name="_todo_cleared.html",
+        context={"cleared": cleared, "row_id": row_id, **todo_numbers(todos_now())},
+    )
+
+
+@app.post("/action-needed/undo")
+def undo_todo(
+    request: Request, change_id: Annotated[list[int] | None, Form()] = None, row: Annotated[str, Form()] = "todo"
+):
+    """Undo a Done or Not needed click, and draw the to-do's row again if it's back on my list."""
+
+    def undo_it():
+        with sorting.no_sorting_meanwhile():
+            return labelling.undo_clear(change_id or [])
+
+    back, problem = attempt(request, row, undo_it, not_done="Not undone")
+    if problem:
+        return problem
+    todos = todos_now()
+    todo = next((todo for todo in todos if back and set(todo.message_ids) & set(back)), None)
+    if back is None:
+        message = "This has already been undone."
+    else:
+        message = "Undone: back in your inbox." if todo is None else "Undone: back on your list, and in your inbox."
+    return templates.TemplateResponse(
+        request=request,
+        name="_todo_undone.html",
+        context={"todo": todo, "message": message, "gmail_address": saved_account(), **todo_numbers(todos)},
     )
 
 
@@ -506,6 +580,8 @@ def what_undo_did(undone):
         text = "Undone, but this email isn't in Gmail any more, so only the log changed."
     elif undone.was_mark:
         text = "Undone: it's off your to-do list, and out of your inbox again." if undone.out_of_inbox else "Undone: it's off your to-do list."
+    elif undone.was_clear:
+        text = "Undone: it's back in your inbox, and back on your to-do list."
     elif undone.back_in_inbox:
         text = f"Undone: it's back {where}, and back in your inbox."
     else:

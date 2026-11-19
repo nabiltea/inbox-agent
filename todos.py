@@ -16,7 +16,7 @@ conversations, but they're one thing for me to do (see _same_task).
 """
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 
 # Due today, tomorrow or the day after counts as urgent.
@@ -67,6 +67,9 @@ class Todo:
     urgency: str  # one of ORDER
     others: list[OtherConversation]  # the task's other conversations, newest first. Usually none
     marked: bool = False  # I added it myself, with the History page's "Needs action" button
+    # Every flagged email in my inbox that this row stands for, newest first: the ones Done and
+    # Not needed take out of the inbox. The page's business, so the MCP server leaves it out.
+    message_ids: list[str] = field(default_factory=list)
 
 
 def list_todos(flagged, inbox_ids, today=None):
@@ -95,6 +98,7 @@ def list_todos(flagged, inbox_ids, today=None):
             # gave one: a reminder without a date doesn't erase the deadline.
             todo = todos[email["thread_id"]]
             todo.more += 1
+            todo.message_ids.append(email["message_id"])
             if todo.deadline is None and deadline:
                 todo.deadline = deadline
                 todo.urgency = _urgency(deadline, email["time_sensitive"], today)
@@ -125,6 +129,7 @@ def list_todos(flagged, inbox_ids, today=None):
             urgency=_urgency(deadline, email["time_sensitive"], today),
             others=[],
             marked=marked,
+            message_ids=[email["message_id"]],
         )
     return sorted(_one_row_per_task(todos.values(), today), key=_position)
 
@@ -142,6 +147,7 @@ def _one_row_per_task(rows, today):
             tasks.append(row)
             continue
         task.more += row.more + 1
+        task.message_ids += row.message_ids
         task.others.append(OtherConversation(row.thread_id, row.what_to_do, row.received))
         if task.deadline is None and row.deadline:
             task.deadline = row.deadline

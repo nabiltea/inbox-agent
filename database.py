@@ -19,20 +19,32 @@ DB_FILE = Path(__file__).parent / "inbox_agent.db"
 # queries add with a LEFT JOIN.
 _AGENT_SAYS_NEEDS_ME = "COALESCE(f.needs_me = 'yes', decisions.needs_reply = 1 OR decisions.needs_action = 1)"
 
-# Then whether I've marked it as needing action. That's a row in label_changes, beside Claude's
-# answer and never over it, because "Claude said no, I said yes" is exactly the miss that Step 8's
-# accuracy tests look for.
-_I_MARKED = """EXISTS (
-    SELECT 1 FROM label_changes AS m
-    WHERE m.message_id = decisions.message_id AND m.action = 'needs_action' AND m.undone_at IS NULL
+# Then what I've said myself, if anything: 'needs_action' from the History page's button, or
+# 'not_needed' from Action needed's. Each is a row in label_changes, beside Claude's answer and
+# never over it, because "Claude said no, I said yes" and the other way round are exactly the
+# mistakes Step 8's accuracy tests look for. If I've said both, the newest counts.
+_I_SAID = """(
+    SELECT m.action FROM label_changes AS m
+    WHERE m.message_id = decisions.message_id AND m.action IN ('needs_action', 'not_needed') AND m.undone_at IS NULL
+    ORDER BY m.id DESC LIMIT 1
 )"""
 
-_NEEDS_ME = f"({_I_MARKED} OR {_AGENT_SAYS_NEEDS_ME})"
+# Whether I've marked it as needing action. COALESCE turns "I've said nothing" (NULL) into no.
+_I_MARKED = f"COALESCE({_I_SAID} = 'needs_action', 0)"
+
+# Whether it needs me: what I said, or else what the agent thinks.
+_NEEDS_ME = f"(CASE {_I_SAID} WHEN 'needs_action' THEN 1 WHEN 'not_needed' THEN 0 ELSE {_AGENT_SAYS_NEEDS_ME} END)"
 
 # Whether an email is a to-do for as long as it's in my inbox: I marked it, or the agent left
-# it there because it needs me. An email the agent archived although it was flagged, for being
-# old, doesn't count until I mark it.
-_FLAGGED = f"({_I_MARKED} OR (decisions.archived = 0 AND {_AGENT_SAYS_NEEDS_ME}))"
+# it there because it needs me and I haven't said it doesn't. An email the agent archived
+# although it was flagged, for being old, doesn't count until I mark it.
+_FLAGGED = f"""(CASE {_I_SAID} WHEN 'needs_action' THEN 1 WHEN 'not_needed' THEN 0
+                ELSE decisions.archived = 0 AND {_AGENT_SAYS_NEEDS_ME} END)"""
+
+# My changes that are about where an email is and whether it needs me, not about its label:
+# marking it as needing action, and clearing it from my to-do list as done or not needed.
+INBOX_ACTIONS = ("needs_action", "done", "not_needed")
+_IS_INBOX_ACTION = "IN ('needs_action', 'done', 'not_needed')"
 
 
 def plain_text(text):
@@ -434,12 +446,14 @@ def save_label_change(conn, message_id, action, label, label_added, left_inbox, 
 # The changes I've made by hand and haven't undone, with which email each one is about. An
 # email's label can change more than once, so newest says whether this is its latest change.
 # Only that one can be undone: an older one would bring back a label from before the newer
-# change. Marking an email has nothing to do with its label, so it's compared only with other marks.
-_MY_CHANGES = """
+# change. Marking an email or clearing it from my to-do list has nothing to do with its label,
+# so those are only compared with each other (INBOX_ACTIONS), newest first in the same way.
+_MY_CHANGES = f"""
     SELECT c.*, decisions.subject, decisions.sender, decisions.thread_id,
            c.id = (
                SELECT MAX(n.id) FROM label_changes AS n
-               WHERE n.message_id = c.message_id AND n.undone_at IS NULL AND (n.action = 'needs_action') = (c.action = 'needs_action')
+               WHERE n.message_id = c.message_id AND n.undone_at IS NULL
+                 AND (n.action {_IS_INBOX_ACTION}) = (c.action {_IS_INBOX_ACTION})
            ) AS newest
     FROM label_changes AS c JOIN decisions ON decisions.message_id = c.message_id
     WHERE c.undone_at IS NULL
@@ -459,7 +473,7 @@ def my_change(conn, change_id):
 def newest_changes(conn, message_ids):
     """For some emails in the list: {message ID: the changes I can undo}, for those that have any.
 
-    That's at most two: its newest label change, and my mark if I've marked it.
+    That's at most two: its newest label change, and my newest mark or clearing from the to-do list.
     """
     question_marks = ", ".join("?" * len(message_ids))  # one per email, so the IDs still go in as values, never as SQL
     changes = {}
@@ -490,23 +504,49 @@ def save_needs_action(conn, message_id, entered_inbox):
     conn.commit()
 
 
-def save_undone_change(conn, change):
+def save_cleared_todo(conn, message_ids, action):
+    """Record that I took emails off my to-do list as 'done' or 'not_needed': one row each in label_changes.
+
+    They all left the inbox with this click. Like a mark, nothing changes in decisions, so the
+    log still says what the agent did and thought. One commit saves every row, so a crash can't
+    save only some of them. Returns the new rows' IDs, which the row's Undo sends back.
+    """
+    now = datetime.now().isoformat(timespec="seconds")
+    ids = []
+    for message_id in message_ids:
+        email = conn.execute("SELECT label, label_added FROM decisions WHERE message_id = ?", (message_id,)).fetchone()
+        cursor = conn.execute(
+            """
+            INSERT INTO label_changes (
+                message_id, changed_at, action, old_label, new_label, old_label_added, new_label_added, left_inbox, entered_inbox
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, 0)
+            """,
+            (message_id, now, action, email["label"], email["label"], email["label_added"], email["label_added"]),
+        )
+        ids.append(cursor.lastrowid)
+    conn.commit()
+    return ids
+
+
+def save_undone_change(conn, change, commit=True):
     """Record that I undid a change: the email gets its old label back, and the change's row gets crossed out.
 
     A change that took the email out of the inbox found it there, so the email is back to not
-    being archived. Undoing a mark only crosses it out: it changed nothing else in the log, and
-    the label may have changed since. One commit saves both, so a crash can't save only one.
+    being archived. Undoing a mark or a cleared to-do only crosses it out: it changed nothing
+    else in the log, and the label may have changed since. One commit saves both, so a crash
+    can't save only one. commit=False leaves the commit to the caller, to undo several at once.
     """
     conn.execute(
         "UPDATE label_changes SET undone_at = ? WHERE id = ?",
         (datetime.now().isoformat(timespec="seconds"), change["id"]),
     )
-    if change["action"] != "needs_action":
+    if change["action"] not in INBOX_ACTIONS:
         conn.execute(
             "UPDATE decisions SET label = ?, label_added = ?, archived = archived AND NOT ? WHERE message_id = ?",
             (change["old_label"], change["old_label_added"], change["left_inbox"], change["message_id"]),
         )
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 def emails_with_label(conn, label):

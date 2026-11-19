@@ -1178,6 +1178,40 @@ The real checks found a to-do built from text I never saw. Emails often come as 
   - **It isn't perfect.** The reader doesn't look at stylesheets, so a part that only a stylesheet hides or shows, like a separate phone version, is read the way the HTML has it.
   - **Booking confirmations need nothing, as far as the reader is concerned,** even for a trip coming up soon. Keeping upcoming trips or events on the list as reminders would be a change to the reader's rules, separate from this fix.
 
+### Buttons to clear a to-do
+
+After the first real Sort, my list had 81 emails in it, and the only way to clear one was to archive it in Gmail. Now each to-do on Action needed has two buttons.
+
+- **Decided:**
+  - **Two buttons, because they mean different things.** Done: Claude was right, and I've dealt with it. Not needed: Claude was wrong, and it never needed me. Both take the to-do's emails out of my inbox and leave their labels alone. Not needed also records my answer beside Claude's, the mirror of the History page's Needs action button. "Claude said yes, I said no" is a labelled false alarm for Step 8's accuracy tests, so overwriting Claude's answer would throw it away.
+  - **One click clears the whole row.** A row can stand for several emails, like a contract's reminders, so the button archives every one of them in one request to Gmail. Other emails in those conversations stay where they are, because the agent hasn't sorted them yet.
+  - **What each answer does later.** After Not needed, the email no longer counts as needing me, even if it comes back into my inbox. After Done, Claude's answer stands, so if I put the email back in my inbox myself, it's a to-do again. If I've said both Not needed and Needs action about one email, the newer answer counts.
+  - **The log keeps one row per email,** in `label_changes`, like every other change, and nothing changes in `decisions`, so the log still says what the agent did and thought. Each email is listed under History → Your changes with its own Undo, and the row's Undo undoes the whole click.
+  - **Undoing goes newest first,** with marks and clears as one group, separate from label changes.
+  - **One click, no "are you sure?",** because Undo is right there. The count beside the heading updates straight away, and Undo brings the row back in its place.
+  - **Smaller choices:** the message after a click names the newest email's subject. Each click asks Gmail once more, so the count stays right. The buttons work during a Sort, because they only touch emails that are already sorted, and their Undo waits for one, like every Undo. Claude Desktop's list doesn't get the new field that says which emails a row stands for.
+- **Built:**
+  - `clear_todo()` and `undo_clear()` in `web/labelling.py`: Gmail first, then the log, as with every other button.
+  - In `database.py`: `save_cleared_todo()`; `_I_SAID`, my newest answer about whether an email needs me, which `_NEEDS_ME`, `_FLAGGED` and `_I_MARKED` now use; and marks and clears as one group in `_MY_CHANGES`. Undoing a mark or a clear only crosses out its row.
+  - In `todos.py`: each row lists the emails it stands for, in `message_ids`.
+  - On the page: `_todo_row.html`, one to-do moved out of `action.html` with its buttons, plus `_todo_count.html`, `_todo_cleared.html` and `_todo_undone.html`. Three new addresses in `web/app.py`: `/action-needed/done`, `/not-needed` and `/undo`.
+- **Learned:**
+  - **HTML settings are inherited.** I'd put `hx-disabled-elt="find button"` on the form, to grey out both buttons during a click. The buttons inside took the setting over, and "find button" then searched inside the clicked button itself, which matched nothing, so nothing greyed out. All the tests passed. The browser's console reported it. A disabled `<fieldset>` disables everything inside it, so each button now disables the fieldset around both.
+  - **A rule that seemed obvious can hide a bug.** Undoing a change used to write the old label back and set "archived" in `decisions`. That's right for a label change, but for a clear it would have rewritten what the agent had recorded about an email it once archived. One test caught it, with exactly that email.
+  - **A test's memory of earlier tests can make it wrong.** Several first versions of my checks looked at all of an email's rows, including ones from earlier tests that were already undone. They failed while the code was right.
+- **Result:**
+  - **73 tests on a copy of my log, with a stand-in for Gmail's API:**
+    - Done and Not needed on one email and on a row of several.
+    - An email I'd archived myself, a second click, made-up emails, and three kinds of Gmail failure at each step: nothing is recorded, and the same click works afterwards.
+    - Undo from the row and from History, including after one email was undone on its own.
+    - Both answers' effects later, and their order with Needs action.
+    - The agent's record kept as it was, the run numbers unchanged, and undoing a whole run leaving cleared emails alone.
+    - 8 clicks at the same moment, a forged click, text trying to be code, and Claude Desktop's list.
+  - **Breaking the code on purpose:** 7 different breaks each made tests fail.
+  - **Action needed, committed templates against new ones, on the same log copy:** the same 41 rows, the same text and the same 47 Gmail links. Only the buttons are new.
+  - **In a real browser, with made-up emails:** Done on a row of 3, Undo and Not needed all work, and the count follows without a reload. Both buttons grey out at once, the console shows no errors, and it fits at phone width.
+  - **The real thing, after a backup:** Done on a row of 8 real emails took all 8 out of my inbox in one click, and Undo put all 8 back. Not needed cleared a to-do that never needed me. Every email's row in the log stayed as it was.
+
 ## What's left
 
 - [x] **Step 1:** First call to Claude
@@ -1247,7 +1281,7 @@ The real checks found a to-do built from text I never saw. Emails often come as 
   - [x] another fresh backup, then press Sort for the first time
 - [ ] Find out why Gmail refused part of a request for 45 emails at once, at email 37, and whether the code needs to wait a full minute (the first real Sort fetched 229 without a pause)
 - [x] The reader reads the version of an email I see: the HTML version when there is one, without its hidden parts, rather than a plain-text version that can say other things
-- [ ] Buttons to clear a to-do on the page: Done, and Not needed, which also records that Claude was wrong. Each archives every conversation in its row, with an Undo. They're protected like every other button, by the protection against other websites that piece 3 added
+- [x] Buttons to clear a to-do on the page: Done, and Not needed, which also records that Claude was wrong. Each archives every conversation in its row, with an Undo. They're protected like every other button, by the protection against other websites that piece 3 added
 - [ ] **Step 7, piece 6:** the draft flow: "Draft reply" with a hints box, the Critic's verdict, and saving to Gmail drafts, also when the Critic isn't satisfied
 - [ ] A double-click shortcut that starts the web page, so opening it doesn't need VS Code
 - [ ] Decide whether to move the Google app from "Testing" to "In production", which would end the weekly sign-in (first check Google's rules for unverified apps that use Gmail)

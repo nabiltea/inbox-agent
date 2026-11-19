@@ -149,7 +149,8 @@ def list_todos() -> list[dict]:
     address = saved_account()
     return [
         {
-            **asdict(todo),
+            # message_ids is for the page's Done and Not needed buttons, and would only be noise for Claude.
+            **{name: value for name, value in asdict(todo).items() if name != "message_ids"},
             "received": todo.received.isoformat(timespec="minutes"),
             "deadline": todo.deadline.isoformat() if todo.deadline else None,
             "gmail_link": gmail_link(todo.thread_id, address) if address else None,

@@ -1,0 +1,8 @@
+{# What a to-do's row says after Undo: the row itself again if it's back on the list, or else what
+   happened, and the new count beside the heading. #}
+{% if todo %}
+  {% include "_todo_row.html" %}
+{% else %}
+<li class="px-5 py-3 text-sm text-gray-600" role="status">{{ message }}</li>
+{% endif %}
+{% with oob = True %}{% include "_todo_count.html" %}{% endwith %}

@@ -1,0 +1,116 @@
+{# One to-do on the Action needed page: how pressing it is, what to do, and the buttons to clear it. A row
+   is a template of its own, so Undo can draw one row again by itself. todos.py has already worked out
+   what each row says; the page only decides how things look (the tags here, and show_date and
+   show_deadline in app.py). Everything here is escaped, as on every page (see app.py). #}
+{% from "_macros.html" import open_in_gmail, tag %}
+{# The word on the tag for each kind of to-do the full read can find (KINDS in full_read.py) #}
+{% set kind_tags = {
+  "reply by email": "Reply", "reply on another site": "Reply", "sign or fill in a form": "Sign", "pay": "Pay",
+  "verify an account": "Verify", "attend something": "Attend", "answer an invitation": "Invitation", "other": "Action",
+} %}
+{% set button_style = "rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-800 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50" %}
+{# flex-wrap lets the last line, with the buttons and the Gmail link, take a line of its own #}
+<li class="flex flex-wrap items-start gap-x-4 gap-y-1 px-5 py-4">
+  {# How pressing it is, then what kind of to-do. A normal to-do has no tag for how pressing
+     it is. An email with no full read has no kind, so it keeps triage's Action and Reply. #}
+  <div class="flex w-24 shrink-0 flex-col items-start gap-1">
+    {% if todo.urgency == "urgent" %}
+      {{ tag("Urgent", "bg-red-100 text-red-800") }}
+    {% elif todo.urgency == "time-sensitive" %}
+      {{ tag("Time-sensitive", "border border-red-400 text-red-700") }}
+    {% elif todo.urgency == "overdue" %}
+      {{ tag("Overdue", "bg-gray-200 text-gray-700") }}
+    {% endif %}
+    {% if todo.kind %}
+      {{ tag(kind_tags.get(todo.kind, "Action"), "bg-blue-100 text-blue-800" if todo.needs_reply else "bg-amber-100 text-amber-800") }}
+    {% else %}
+      {% if todo.needs_action %}{{ tag("Action", "bg-amber-100 text-amber-800") }}{% endif %}
+      {% if todo.needs_reply %}{{ tag("Reply", "bg-blue-100 text-blue-800") }}{% endif %}
+    {% endif %}
+  </div>
+  <div class="min-w-0 flex-1">
+    <p class="font-medium">{{ todo.what_to_do }}</p>
+    {# When and where. The place is plain text, never a link: it comes from an email, and
+       links in emails can be phishing. "Open in Gmail" is the way to the real link. #}
+    {% if todo.deadline or todo.place %}
+      <p class="mt-0.5 text-sm">
+        {% if todo.deadline %}{{ todo.deadline|show_deadline }}{% endif %}
+        {% if todo.deadline and todo.place %}·{% endif %}
+        {% if todo.place %}{{ todo.place }}{% endif %}
+      </p>
+    {% endif %}
+    <p class="mt-0.5 text-sm text-gray-500">
+      {{ todo.sender }} · {% if todo.subject != todo.what_to_do %}{{ todo.subject }} · {% endif %}{{ todo.received|show_date }} · {{ todo.label }}
+      {% if todo.more %}
+        · <span class="text-blue-600">+{{ todo.more }} more {{ "email" if todo.more == 1 else "emails" }}</span>
+      {% endif %}
+      {% if todo.marked %}· You added this on the History page{% endif %}
+    </p>
+    {# What a click just did, like Undo bringing the row back #}
+    {% if message %}<p class="mt-1 text-sm text-gray-700" role="status">{{ message }}</p>{% endif %}
+    {# <details> is a fold the browser handles by itself, with no JavaScript: clicking
+       the <summary> line opens and closes the rest. #}
+    {% if todo.steps or todo.why %}
+      <details class="mt-1 text-sm">
+        <summary class="cursor-pointer text-gray-600 hover:text-gray-900">
+          {% if todo.steps %}
+            {{ todo.steps|length }} {{ "step" if todo.steps|length == 1 else "steps" }} and why
+          {% else %}
+            Why
+          {% endif %}
+          {% if todo.others %}
+            · {{ todo.others|length }} more {{ "conversation" if todo.others|length == 1 else "conversations" }}
+          {% endif %}
+        </summary>
+        {% if todo.steps %}
+          <ol class="mt-1 list-decimal space-y-0.5 pl-5">
+            {% for step in todo.steps %}
+              <li>{{ step }}</li>
+            {% endfor %}
+          </ol>
+        {% endif %}
+        {% if todo.why %}
+          <p class="mt-1 text-gray-600">Why: {{ todo.why }}</p>
+        {% endif %}
+        {# The task's other conversations. It stays on the list until all of them are
+           archived, so each one gets its own way to Gmail. #}
+        {% if todo.others %}
+          <div class="mt-2 border-t border-gray-200 pt-2">
+            <p class="text-gray-600">Also about this</p>
+            <ul class="mt-1 space-y-0.5">
+              {% for other in todo.others %}
+                <li>
+                  {{ other.received|show_date }} · {{ other.what_to_do }}
+                  {% if gmail_address %}· {{ open_in_gmail(other.thread_id, gmail_address) }}{% endif %}
+                </li>
+              {% endfor %}
+            </ul>
+          </div>
+        {% endif %}
+      </details>
+    {% endif %}
+  </div>
+  {# The last line, at the row's left edge: the buttons that take this to-do off the list, then the
+     Gmail link. Both buttons send the row's emails, which are in the form, so one click archives
+     every conversation the row stands for. hx-post sends the click, and hx-target says the answer
+     replaces this whole row. hx-disabled-elt disables the fieldset around the buttons straight
+     away, which greys out both, so a double click can't send two requests. #}
+  <div class="flex w-full flex-wrap items-center gap-x-4 gap-y-2">
+    <form hx-target="closest li" hx-swap="outerHTML">
+      {% for message_id in todo.message_ids %}
+        <input type="hidden" name="message_id" value="{{ message_id }}">
+      {% endfor %}
+      <fieldset class="flex flex-wrap gap-2">
+        <button type="button" hx-post="{{ url_for('todo_done').path }}" hx-disabled-elt="closest fieldset" class="{{ button_style }}">Done</button>
+        <button type="button" hx-post="{{ url_for('todo_not_needed').path }}" hx-disabled-elt="closest fieldset" class="{{ button_style }}"
+                title="Claude was wrong: this never needed you">Not needed</button>
+      </fieldset>
+    </form>
+    {# Without a known account there's no link, rather than one that opens the wrong account. #}
+    {% if gmail_address %}
+      {{ open_in_gmail(todo.thread_id, gmail_address) }}
+    {% endif %}
+  </div>
+  {# Where _row_problem.html goes if a click doesn't work. Empty, it takes up no room. #}
+  <p id="problem-todo-{{ todo.message_id }}" class="w-full empty:hidden"></p>
+</li>

@@ -78,6 +78,7 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 | Apply a label | Agent alone | Affects one email, easy to undo |
 | Archive a sorted email | Agent alone | Easy to undo. Emails that need a reply or an action, and Unsorted ones, stay in the inbox |
 | Flag "needs reply" or "needs action" | Agent alone | It's only information |
+| Clear a to-do, as Done or Not needed | Me, on the page | Archives its emails, and can be undone. Not needed also records that Claude was wrong, beside its answer |
 | Create a new label | Agent suggests, I approve | Changes how every future email is sorted |
 | Draft a reply | Agent alone | It's only a draft |
 | Send an email | Never the agent | Can't be undone |

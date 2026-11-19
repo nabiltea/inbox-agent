@@ -1,4 +1,4 @@
-"""Changing an email's label by hand, behind the buttons on the Unsorted page, and undoing that from the History page.
+"""Changing an email by hand, behind the buttons on the Unsorted, History and Action needed pages, and undoing it.
 
 A change goes in the same order as sorting (apply_sorted() in triage.py): first Gmail,
 then the log. It only takes a few quick requests to Gmail, so unlike the Sort button,
@@ -15,6 +15,7 @@ from full_read import remove_invisible
 from gmail_client import (
     EmailGoneError,
     change_labels,
+    change_labels_bulk,
     create_label_if_missing,
     current_labels,
     explain_failures,
@@ -87,6 +88,7 @@ class Undone:
     email_gone: bool  # it isn't in Gmail any more, so only the log changed
     was_mark: bool = False  # what got undone was marking it as needing action, so its label never changed
     out_of_inbox: bool = False  # the mark had put it back in the inbox, and now it has left again
+    was_clear: bool = False  # what got undone was clearing it from my to-do list, so its label never changed
     created_label: str | None = None  # the label the undone click added to labels.json, if it did
     others_with_label: int = 0  # how many other emails have that label, which is why it stays
     label_stuck: bool = False  # labels.json couldn't be changed, so the label is still there
@@ -274,6 +276,73 @@ def mark_needs_action(message_id):
     return True
 
 
+@dataclass
+class Cleared:
+    """What a Done or Not needed click did, for the row on Action needed."""
+
+    subject: str  # the subject of the row's newest email
+    emails: int  # how many emails left the inbox
+    change_ids: list[int]  # their rows in label_changes, which the row's Undo sends back
+    not_needed: bool
+
+
+def clear_todo(message_ids, not_needed=False):
+    """Take a to-do off my list: every email its row stands for leaves the inbox, and the log records why.
+
+    Done means Claude was right and I've dealt with it. Not needed means Claude was wrong: the
+    email stops counting as needing me, also if it comes back into my inbox, and Claude's answer
+    stays beside mine, for Step 8's accuracy tests. Only emails that are on my list right now
+    count: flagged, and in my inbox, which Gmail gets asked about, because I may have archived
+    some myself since. All of them leave in one request, before anything is recorded.
+
+    message_ids come from the page, newest first. Returns what happened, or None if none of them
+    is on my list any more, for example after a second click.
+    """
+    wanted = set(message_ids)
+    with _one_at_a_time, closing(database.connect()) as conn:
+        flagged = [email for email in database.flagged_emails(conn) if email["message_id"] in wanted]
+        if not flagged:
+            return None
+        service = get_gmail_service(allow_browser_sign_in=False)
+        with explain_failures():
+            inbox = inbox_message_ids(service)
+            leaving = [email for email in flagged if email["message_id"] in inbox]
+            if not leaving:
+                return None
+            change_labels_bulk(service, [email["message_id"] for email in leaving], remove=["INBOX"])
+        change_ids = database.save_cleared_todo(
+            conn, [email["message_id"] for email in leaving], "not_needed" if not_needed else "done"
+        )
+    return Cleared(leaving[0]["subject"], len(leaving), change_ids, not_needed)
+
+
+def undo_clear(change_ids):
+    """Undo a Done or Not needed click: its emails go back in the inbox, first in Gmail, then in the log.
+
+    Some of them may have been undone already, one by one on the History page, so this undoes
+    the rest. Each must be its email's newest mark or clearing (see _MY_CHANGES in database.py).
+    Gmail ignores an email it doesn't have any more in a many-at-once change, so one deleted
+    email can't block the others. Returns the message IDs that went back, or None if nothing
+    is left to undo, for example after a second click.
+    """
+    with _one_at_a_time, closing(database.connect()) as conn:
+        changes = [change for change in (database.my_change(conn, change_id) for change_id in change_ids)
+                   if change is not None and change["action"] in ("done", "not_needed")]
+        if not changes:
+            return None
+        if not all(change["newest"] for change in changes):
+            raise NotNewestChangeError(change_ids)
+        service = get_gmail_service(allow_browser_sign_in=False)
+        back = [change["message_id"] for change in changes if change["left_inbox"]]
+        if back:
+            with explain_failures():
+                change_labels_bulk(service, back, add=["INBOX"])
+        for change in changes:
+            database.save_undone_change(conn, change, commit=False)
+        conn.commit()  # all of the click's rows at once
+    return [change["message_id"] for change in changes]
+
+
 def _put_back_in_gmail(service, change):
     """Reverse a change in Gmail. Repeating this is harmless, so if it fails partway, the same click finishes it."""
     add, remove = [], []
@@ -340,6 +409,7 @@ def undo_change(change_id):
             email_gone=email_gone,
             was_mark=change["action"] == "needs_action",
             out_of_inbox=bool(change["entered_inbox"]) and not email_gone,
+            was_clear=change["action"] in ("done", "not_needed"),
         )
         if change["label_created"]:
             _forget_new_label(conn, change["new_label"], undone)

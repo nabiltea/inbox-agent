@@ -68,10 +68,10 @@ flowchart TD
 
 ## Status
 
-- **In use on my real inbox:** the web page and its buttons (sorting new emails with the full read, label approvals and changes, "Needs action" and undo), sorting from the terminal, and the MCP tools in Claude Desktop.
+- **In use on my real inbox:** the web page and its buttons (sorting new emails with the full read, label approvals and changes, clearing to-dos, "Needs action" and undo), sorting from the terminal, and the MCP tools in Claude Desktop.
 - **How the buttons were tested:** first on copies of my real log with a stand-in for Gmail's API (more than 2,200 checks for the History page alone, using throwaway scripts that aren't in this repo), then each one pressed once on my real inbox and undone, with the log compared against a backup.
 - **Tried on real emails, without changing anything:** the Drafter and the Critic.
-- **Next:** buttons to clear a to-do, drafting from the web page, accuracy tests for the models, and a demo with made-up emails.
+- **Next:** drafting from the web page, accuracy tests for the models, and a demo with made-up emails.
 
 **Built with:** Python, FastAPI, Jinja2, HTMX, Tailwind CSS, SQLite, the Gmail API, the Claude API (structured outputs and the Message Batches API) and the Model Context Protocol.
 
