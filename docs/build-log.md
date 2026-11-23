@@ -1212,6 +1212,43 @@ After the first real Sort, my list had 81 emails in it, and the only way to clea
   - **In a real browser, with made-up emails:** Done on a row of 3, Undo and Not needed all work, and the count follows without a reload. Both buttons grey out at once, the console shows no errors, and it fits at phone width.
   - **The real thing, after a backup:** Done on a row of 8 real emails took all 8 out of my inbox in one click, and Undo put all 8 back. Not needed cleared a to-do that never needed me. Every email's row in the log stayed as it was.
 
+### Step 7, piece 6: drafting from the page (in progress)
+
+The Drafter and the Critic have worked from the terminal since Step 6. This piece brings them to the Action needed page, in five parts.
+
+- **Decided, for the whole piece:**
+  - **A "Draft reply" button on to-dos that need a reply by email.** It opens a page for that conversation, with the conversation itself, a box for my hints and a "Write draft" button. A reply that happens on another website gets no button.
+  - **The Drafter runs on a second thread, like Sort,** and the page shows each step as it happens: lookups, each round of the Critic's review, revisions.
+  - **The log keeps every draft,** in a table of its own: my hints, the draft, what I still have to fill in, the Critic's verdict, the cost, and when it was saved to Gmail. The home page's cost card counts drafting too.
+  - **I can edit the draft before saving it,** and the log keeps both versions, which later shows how much I change the Drafter's work.
+  - **Saving is one click:** "Save to Gmail drafts" when the Critic approves, and "Save anyway" under its problems when it doesn't. "Write again" starts fresh with new hints, and the old draft stays in the log.
+  - **One draft at a time, saved once,** so a double click can't make two Gmail drafts. Drafting works during a Sort.
+  - **A $0.50 limit per draft.** The button says "about 5 to 20 cents", and the page shows the real cost afterwards.
+  - **The home page counts the agent's drafts still waiting in Gmail,** and Action needed tags a to-do whose draft is saved.
+  - **The Drafter keeps reaching Gmail through my MCP server,** with read-only tools. Saving calls my Gmail code directly.
+  - **Five parts:** 1, the Drafter as a function the page can call, with the limit; 2, the drafts table, the button and the draft page; 3, the second thread and live progress; 4, the draft, the verdict, editing and saving; 5, the home page's count and the tag.
+
+**Part 1: the Drafter as a function the page can call**
+- **Decided:**
+  - **The work moves into `write_draft()`, and the terminal command calls it.** All of the Drafter's work used to sit inside `main()`, the terminal's routine. Now `write_draft()` takes an open connection to my MCP server, the conversation and my hints, and hands back the last draft the Critic reviewed, with its verdict. `main()` keeps the terminal's parts: reading the command, printing, and `--save`.
+  - **The caller passes in a "report" function for each step.** The terminal passes `print`, so it prints exactly what it printed before. The page will pass one that keeps the newest step for its once-a-second check.
+  - **When the limit stops a draft the Critic has already reviewed, I still get that draft,** with the Critic's problems and a note that it stopped at the limit, so the money isn't wasted. With no draft yet, it stops with a message and the cost so far.
+  - **The limit is checked before each Drafter turn,** like Sort's limit between emails. So a draft can go over by one turn: usually 5 to 15 cents, and at most about 55 cents if both models wrote their longest possible answers.
+  - **Prices from Anthropic's current pricing page.** Reading from the cache costs 0.05× the input price on Sonnet 5.5 and Opus 5.5, not the 0.1× my code used, so that part had been counted twice. And when a model declines a request and another one answers instead, both attempts can be billed, each at its own model's prices. So the cost now counts every attempt, using the highest known prices for a model it doesn't know. Both choices err high rather than low.
+  - **A stop becomes an error the caller handles.** The terminal used to end the program from inside the loop with `sys.exit`. On the page's second thread, that would end only the thread, silently, and the page would say "drafting" forever. Now `write_draft()` raises `DrafterStopped`, and the terminal turns it back into the same message.
+  - **When drafting stops early, the terminal shows just the message.** Since Step 6 it had shown a long traceback ending in the message (see Found).
+- **Built:** in `drafter.py`, `write_draft()`; `Drafted`, what it hands back; `DrafterStopped`; `COST_LIMIT`; and a `CostTracker` that knows each model's cache price and counts every attempt.
+- **Learned:**
+  - **Separating the work from what shows it.** The same function now has two callers, the terminal and soon the page, and each decides how to show progress and results. A function passed in to be called later (a "callback") lets the work report each step without knowing who's listening.
+  - **Prices change, so cost code needs a source and a date.** The price table now says where it came from and when it was checked.
+- **Result,** with no money spent:
+  - **Side by side with the committed version,** on 10 made-up conversations with scripted Claude replies, through the real Anthropic library with a fake connection, and my real MCP server code with a stand-in for Gmail: the same output, exit codes, Gmail drafts and requests to Claude, byte for byte. The only differences were the intended ones: the cost line when turns read from the cache, $0.141 instead of $0.143, and in the 4 cases that stop early, a one-line message instead of a traceback of about 50 lines, with the same exit code.
+  - **31 checks of what's new:** the limit after a review, before any draft, just under, exactly at $0.50, and in a turn that also gets the draft approved; each model's prices, an attempt that fell back to another model, and a model with unknown prices; `write_draft()` called directly, after an error, and on a second thread.
+  - **The real MCP server started from a second thread** on Windows, as the page will start it.
+  - **Breaking the code on purpose:** 12 different breaks each made tests fail.
+- **Found:**
+  - **When drafting stopped early, the terminal showed a traceback, not just the message.** My MCP client runs its background tasks as a group, and anything that leaves its `async with` block, a program exit included, comes out wrapped in a "group" of exceptions, which Python prints in full. It had been like this since Step 6, because the code exited from inside that block. Now the terminal leaves the block first and exits afterwards. The page has to do the same: catch `DrafterStopped` inside the block, before it gets wrapped.
+
 ## What's left
 
 - [x] **Step 1:** First call to Claude
@@ -1282,7 +1319,12 @@ After the first real Sort, my list had 81 emails in it, and the only way to clea
 - [ ] Find out why Gmail refused part of a request for 45 emails at once, at email 37, and whether the code needs to wait a full minute (the first real Sort fetched 229 without a pause)
 - [x] The reader reads the version of an email I see: the HTML version when there is one, without its hidden parts, rather than a plain-text version that can say other things
 - [x] Buttons to clear a to-do on the page: Done, and Not needed, which also records that Claude was wrong. Each archives every conversation in its row, with an Undo. They're protected like every other button, by the protection against other websites that piece 3 added
-- [ ] **Step 7, piece 6:** the draft flow: "Draft reply" with a hints box, the Critic's verdict, and saving to Gmail drafts, also when the Critic isn't satisfied
+- [ ] **Step 7, piece 6:** the draft flow: "Draft reply" with a hints box, the Critic's verdict, and saving to Gmail drafts, also when the Critic isn't satisfied, in five parts:
+  - [x] part 1: the Drafter's work as a function the page can call, with a $0.50 limit per draft and up-to-date prices
+  - [ ] part 2: the drafts table in the log, the "Draft reply" button and the draft page
+  - [ ] part 3: the Drafter on a second thread, with each step shown live
+  - [ ] part 4: the draft with the Critic's verdict, editing, and saving to Gmail drafts
+  - [ ] part 5: the home page's count of drafts waiting in Gmail, and a "Draft saved" tag on Action needed
 - [ ] A double-click shortcut that starts the web page, so opening it doesn't need VS Code
 - [ ] Decide whether to move the Google app from "Testing" to "In production", which would end the weekly sign-in (first check Google's rules for unverified apps that use Gmail)
 - [ ] Reorganize the project into folders, as its own step after Step 7, with one setting for where the data files live

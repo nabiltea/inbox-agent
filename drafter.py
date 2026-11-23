@@ -17,7 +17,10 @@ question answered, the right tone and language. If the Critic finds problems, th
 go back to the Drafter as the result of submit_draft, and it revises.
 
 Nothing changes in Gmail unless you add --save, and even then it's only a draft
-that I review and send myself.
+that I review and send myself. One draft stops once it has cost COST_LIMIT dollars.
+
+The work itself is write_draft(), which the web page calls too. The terminal
+command below calls it and prints what it hands back.
 
 Run it with:
   python drafter.py --search "from:someone@example.com"           reply to the newest matching email
@@ -29,6 +32,7 @@ import argparse
 import asyncio
 import json
 import sys
+from dataclasses import dataclass
 from datetime import datetime
 from email.utils import getaddresses, parseaddr
 from pathlib import Path
@@ -47,10 +51,27 @@ load_dotenv()
 # only reads one draft per round, and its judgment matters most, so it gets Opus.
 DRAFTER_MODEL = "claude-sonnet-5-5"
 CRITIC_MODEL = "claude-opus-5-5"
-PRICES = {DRAFTER_MODEL: (2.00, 10.00), CRITIC_MODEL: (4.00, 20.00)}  # dollars per million input / output tokens
+
+# Dollars per million tokens: (input, output, reading from the cache), from Anthropic's
+# pricing page, checked on 23 Nov 2026. Writing to the cache costs 1.25x the input price.
+# Reading from it costs 0.05x on my two models and 0.1x on older ones. The others here
+# are models a declined request may be handed to (see FALLBACK).
+PRICES = {
+    DRAFTER_MODEL: (2.00, 10.00, 0.10),
+    CRITIC_MODEL: (4.00, 20.00, 0.20),
+    "claude-sonnet-5": (2.00, 10.00, 0.20),
+    "claude-opus-5": (5.00, 25.00, 0.50),
+    "claude-opus-4-8": (5.00, 25.00, 0.50),
+}
 
 MAX_STEPS = 15  # the most Drafter turns before giving up, so a confused agent can't run up costs
 MAX_REVIEWS = 3  # the most Critic reviews before giving up
+
+# The most one draft may cost, in dollars, the Drafter and the Critic together. A draft
+# normally costs about 5 to 20 cents, so this only stops one that has gone wrong, like a
+# Drafter going round in circles. It's checked before each Drafter turn, so a draft can
+# go over it by one turn.
+COST_LIMIT = 0.50
 
 # Safety net on every call: if a model declines a request, the API retries it on another Claude model.
 FALLBACK = {"betas": ["server-side-fallback-2026-07-01"], "fallbacks": "default"}
@@ -160,18 +181,44 @@ class CostTracker:
     def __init__(self):
         self.dollars = {}
 
+    @property
+    def total(self):
+        """Everything so far, in dollars."""
+        return sum(self.dollars.values())
+
     def add(self, model, usage):
-        input_price, output_price = PRICES[model]
-        # Cached input (see cache_control below) costs 1.25x to write and 0.1x to read.
-        written = usage.cache_creation_input_tokens or 0
-        read = usage.cache_read_input_tokens or 0
-        cost = (
-            usage.input_tokens * input_price
-            + written * input_price * 1.25
-            + read * input_price * 0.1
-            + usage.output_tokens * output_price
-        ) / 1_000_000
-        self.dollars[model] = self.dollars.get(model, 0) + cost
+        # When a model declines and another one answers instead (see FALLBACK), usage.iterations
+        # lists each attempt with the model that ran it, at that model's prices. A declined
+        # attempt is counted even when Anthropic doesn't bill it, so the total errs high.
+        # Without that list, usage covers the whole call, by the model that was asked.
+        for attempt in usage.iterations or [usage]:
+            ran = getattr(attempt, "model", None) or model
+            # A model missing from PRICES counts at the highest prices there, again erring high.
+            input_price, output_price, cache_read_price = PRICES.get(ran) or max(PRICES.values())
+            written = attempt.cache_creation_input_tokens or 0  # see cache_control below
+            read = attempt.cache_read_input_tokens or 0
+            cost = (
+                attempt.input_tokens * input_price
+                + written * input_price * 1.25
+                + read * cache_read_price
+                + attempt.output_tokens * output_price
+            ) / 1_000_000
+            self.dollars[ran] = self.dollars.get(ran, 0) + cost
+
+
+class DrafterStopped(RuntimeError):
+    """Drafting stopped without a reviewed draft to show. The message says why, in words for the terminal and the page."""
+
+
+@dataclass
+class Drafted:
+    """What write_draft() hands back: the last draft the Critic reviewed, and how it went."""
+
+    draft: dict  # body, open_questions and reply_all, exactly as the Drafter handed them in
+    review: Review  # the Critic's verdict on this draft
+    reviews: int  # how many times the Critic reviewed a draft
+    person: str  # the email address of the person I'm answering, who gets the reply
+    hit_limit: bool = False  # it stopped at COST_LIMIT, so the review's problems weren't fixed
 
 
 def as_data(result):
@@ -305,8 +352,129 @@ async def find_thread(gmail, query):
     """The thread ID of the newest email matching a Gmail search."""
     emails = as_data(await gmail.call_tool("search_emails", {"query": query, "max_results": 1}))
     if not emails:
-        sys.exit(f"No email matches: {query}")
+        raise DrafterStopped(f"No email matches: {query}")
     return emails[0]["thread_id"]
+
+
+async def write_draft(gmail, claude, costs, thread_id, note=None, report=print):
+    """Write a reply to one conversation with the Drafter and the Critic. Nothing changes in Gmail.
+
+    gmail is an open connection to my MCP server, and claude one to Claude. costs is a
+    CostTracker that the caller makes, so the caller still knows what was spent if this
+    stops partway. note is what I want the reply to say, if anything. report gets a line
+    of text at each step: the terminal prints it, and the page will show it.
+
+    Returns a Drafted with the last reviewed draft, approved or not. Raises DrafterStopped
+    when there's no reviewed draft to hand back.
+    """
+    thread = as_data(await gmail.call_tool("read_thread", {"thread_id": thread_id}))
+    conversation = thread_text(thread)
+    person = find_person(thread)
+    writers = find_writers(thread, person)
+    recent_emails = await my_recent_emails_to(gmail, person, thread_id)
+    profile = load_profile()
+    report(f"Conversation: {thread['subject']!r} ({len(thread['messages'])} messages), answering {person}")
+    report(f"Lookups limited to {len(writers)} people who wrote in it. My earlier emails to {person}: {len(recent_emails)}. "
+           f"Profile files: {profile.count('</') or 'none'}\n")
+
+    # The Drafter's tools: the read-only ones from my MCP server, plus submit_draft.
+    # Their descriptions get a line saying which people's emails they cover.
+    server_tools = (await gmail.list_tools()).tools
+    tools = [
+        {
+            "name": tool.name,
+            "description": f"{tool.description}\nIn this task, only emails with these people are available: {', '.join(writers)}.",
+            "input_schema": tool.input_schema,
+        }
+        for tool in server_tools
+        if tool.name in DRAFTER_MCP_TOOLS
+    ] + [SUBMIT_TOOL]
+
+    # The Drafter always needs the conversation and my last emails to this person,
+    # so it gets them up front. It decides for itself whether anything else is worth looking up.
+    request = (
+        f"Today is {datetime.now():%A %d %B %Y}.\n\n"
+        f"Write a reply to this email conversation (thread ID {thread_id}).\n\n"
+        f"<conversation>\n{conversation}\n</conversation>\n\n"
+        f"<my_last_emails_to_this_person>\n{chr(10).join(recent_emails) or '(none: I have not emailed them before)'}\n</my_last_emails_to_this_person>\n\n"
+        + (f"My instructions: {note}" if note else "I gave no instructions, so leave every decision to me as a placeholder.")
+    )
+    messages = [{"role": "user", "content": request}]
+    research = []  # everything the Drafter looked up, so the Critic can check facts against the same evidence
+    reviews = 0
+    latest = None  # (draft, review): the newest draft the Critic has reviewed
+    final = None  # the same, once the Drafter is done
+
+    # The agent loop: Claude decides what to do next, this code does it and reports back.
+    for step in range(1, MAX_STEPS + 1):
+        # The cost limit, before each paid turn. It counts the Critic's reviews too.
+        if costs.total >= COST_LIMIT:
+            if latest is None:
+                raise DrafterStopped(
+                    f"Stopped at the ${COST_LIMIT:.2f} limit for one draft, after ${costs.total:.3f}, "
+                    "before the Drafter had handed in a draft."
+                )
+            report(f"Stopped at the ${COST_LIMIT:.2f} limit for one draft, after ${costs.total:.3f}.")
+            return Drafted(*latest, reviews, person, hit_limit=True)
+
+        response = await claude.beta.messages.create(
+            model=DRAFTER_MODEL,
+            max_tokens=16000,
+            system=f"{DRAFTER_PROMPT}\n{profile}",  # my profile files change rarely, so they cache well here
+            tools=tools,
+            messages=messages,
+            output_config={"effort": "medium"},  # a good level for multi-step tool use
+            # Every turn resends the whole conversation so far. Caching it makes the
+            # repeated part cost a twentieth of the normal price.
+            cache_control={"type": "ephemeral"},
+            **FALLBACK,
+        )
+        costs.add(DRAFTER_MODEL, response.usage)
+        if response.stop_reason in ("refusal", "max_tokens"):
+            raise DrafterStopped(f"The Drafter stopped early ({response.stop_reason}).")
+
+        # Keep Claude's turn exactly as it came back, thinking included: the history
+        # must only ever grow, never be edited, or its earlier reasoning is lost.
+        messages.append({"role": "assistant", "content": response.content})
+
+        tool_calls = [block for block in response.content if block.type == "tool_use"]
+        if not tool_calls:
+            # Claude may answer in plain text instead of calling a tool, so remind it once.
+            messages.append({"role": "user", "content": "Please hand in the reply with the submit_draft tool."})
+            continue
+
+        # Run every tool call from this turn, and send all the results back together.
+        results = []
+        for call in tool_calls:
+            if call.name == "submit_draft":
+                reviews += 1
+                report(f"Step {step}: Drafter submits a draft. The Critic reviews it (round {reviews})...")
+                review = await critique(claude, costs, profile, conversation, recent_emails, note, research, call.input)
+                report(f"  {'APPROVED' if review.approved else 'NEEDS CHANGES'}: {review.summary}")
+                for problem in review.problems:
+                    report(f"  - [{problem.kind}] {problem.detail}")
+                latest = (call.input, review)
+                if review.approved or reviews >= MAX_REVIEWS:
+                    final = latest
+                results.append({"type": "tool_result", "tool_use_id": call.id, "content": feedback(review)})
+            elif call.name in DRAFTER_MCP_TOOLS:
+                try:
+                    text, failed, used_input = await run_lookup(gmail, call.name, call.input, writers)
+                except MCPError as error:
+                    text, failed, used_input = f"Error: {error}", True, call.input
+                report(f"Step {step}: Drafter calls {call.name}({json.dumps(used_input, ensure_ascii=False)}){' -> refused' if failed else ''}")
+                research.append(f"{call.name}({json.dumps(used_input, ensure_ascii=False)}):\n{text}")
+                results.append({"type": "tool_result", "tool_use_id": call.id, "content": text, "is_error": failed})
+            else:
+                # A name that doesn't match exactly: say which tools exist, so Claude can correct itself.
+                names = ", ".join(tool["name"] for tool in tools)
+                results.append({"type": "tool_result", "tool_use_id": call.id, "content": f"Unknown tool. Available tools: {names}", "is_error": True})
+
+        if final:
+            return Drafted(*final, reviews, person)
+        messages.append({"role": "user", "content": results})
+
+    raise DrafterStopped(f"The Drafter didn't finish within {MAX_STEPS} steps.")
 
 
 async def main():
@@ -321,131 +489,44 @@ async def main():
     claude = anthropic.AsyncAnthropic()
     costs = CostTracker()
 
+    problem = None  # why drafting stopped, if it did
     # Starts my MCP server in the background, the same way Claude Desktop does.
     async with Client(SERVER) as gmail:
-        thread_id = args.thread or await find_thread(gmail, args.search)
-        thread = as_data(await gmail.call_tool("read_thread", {"thread_id": thread_id}))
-        conversation = thread_text(thread)
-        person = find_person(thread)
-        writers = find_writers(thread, person)
-        recent_emails = await my_recent_emails_to(gmail, person, thread_id)
-        profile = load_profile()
-        print(f"Conversation: {thread['subject']!r} ({len(thread['messages'])} messages), answering {person}")
-        print(f"Lookups limited to {len(writers)} people who wrote in it. My earlier emails to {person}: {len(recent_emails)}. "
-              f"Profile files: {profile.count('</') or 'none'}\n")
-
-        # The Drafter's tools: the read-only ones from my MCP server, plus submit_draft.
-        # Their descriptions get a line saying which people's emails they cover.
-        server_tools = (await gmail.list_tools()).tools
-        tools = [
-            {
-                "name": tool.name,
-                "description": f"{tool.description}\nIn this task, only emails with these people are available: {', '.join(writers)}.",
-                "input_schema": tool.input_schema,
-            }
-            for tool in server_tools
-            if tool.name in DRAFTER_MCP_TOOLS
-        ] + [SUBMIT_TOOL]
-
-        # The Drafter always needs the conversation and my last emails to this person,
-        # so it gets them up front. It decides for itself whether anything else is worth looking up.
-        request = (
-            f"Today is {datetime.now():%A %d %B %Y}.\n\n"
-            f"Write a reply to this email conversation (thread ID {thread_id}).\n\n"
-            f"<conversation>\n{conversation}\n</conversation>\n\n"
-            f"<my_last_emails_to_this_person>\n{chr(10).join(recent_emails) or '(none: I have not emailed them before)'}\n</my_last_emails_to_this_person>\n\n"
-            + (f"My instructions: {args.note}" if args.note else "I gave no instructions, so leave every decision to me as a placeholder.")
-        )
-        messages = [{"role": "user", "content": request}]
-        research = []  # everything the Drafter looked up, so the Critic can check facts against the same evidence
-        reviews = 0
-        final = None  # (draft, review) once the Drafter is done
-
-        # The agent loop: Claude decides what to do next, this code does it and reports back.
-        for step in range(1, MAX_STEPS + 1):
-            response = await claude.beta.messages.create(
-                model=DRAFTER_MODEL,
-                max_tokens=16000,
-                system=f"{DRAFTER_PROMPT}\n{profile}",  # my profile files change rarely, so they cache well here
-                tools=tools,
-                messages=messages,
-                output_config={"effort": "medium"},  # a good level for multi-step tool use
-                # Every turn resends the whole conversation so far. Caching it makes the
-                # repeated part cost a tenth of the normal price.
-                cache_control={"type": "ephemeral"},
-                **FALLBACK,
-            )
-            costs.add(DRAFTER_MODEL, response.usage)
-            if response.stop_reason in ("refusal", "max_tokens"):
-                sys.exit(f"The Drafter stopped early ({response.stop_reason}).")
-
-            # Keep Claude's turn exactly as it came back, thinking included: the history
-            # must only ever grow, never be edited, or its earlier reasoning is lost.
-            messages.append({"role": "assistant", "content": response.content})
-
-            tool_calls = [block for block in response.content if block.type == "tool_use"]
-            if not tool_calls:
-                # Claude may answer in plain text instead of calling a tool, so remind it once.
-                messages.append({"role": "user", "content": "Please hand in the reply with the submit_draft tool."})
-                continue
-
-            # Run every tool call from this turn, and send all the results back together.
-            results = []
-            for call in tool_calls:
-                if call.name == "submit_draft":
-                    reviews += 1
-                    print(f"Step {step}: Drafter submits a draft. The Critic reviews it (round {reviews})...")
-                    review = await critique(claude, costs, profile, conversation, recent_emails, args.note, research, call.input)
-                    print(f"  {'APPROVED' if review.approved else 'NEEDS CHANGES'}: {review.summary}")
-                    for problem in review.problems:
-                        print(f"  - [{problem.kind}] {problem.detail}")
-                    if review.approved or reviews >= MAX_REVIEWS:
-                        final = (call.input, review)
-                    results.append({"type": "tool_result", "tool_use_id": call.id, "content": feedback(review)})
-                elif call.name in DRAFTER_MCP_TOOLS:
-                    try:
-                        text, failed, used_input = await run_lookup(gmail, call.name, call.input, writers)
-                    except MCPError as error:
-                        text, failed, used_input = f"Error: {error}", True, call.input
-                    print(f"Step {step}: Drafter calls {call.name}({json.dumps(used_input, ensure_ascii=False)}){' -> refused' if failed else ''}")
-                    research.append(f"{call.name}({json.dumps(used_input, ensure_ascii=False)}):\n{text}")
-                    results.append({"type": "tool_result", "tool_use_id": call.id, "content": text, "is_error": failed})
-                else:
-                    # A name that doesn't match exactly: say which tools exist, so Claude can correct itself.
-                    names = ", ".join(tool["name"] for tool in tools)
-                    results.append({"type": "tool_result", "tool_use_id": call.id, "content": f"Unknown tool. Available tools: {names}", "is_error": True})
-
-            if final:
-                break
-            messages.append({"role": "user", "content": results})
-
-        if final is None:
-            sys.exit(f"The Drafter didn't finish within {MAX_STEPS} steps.")
-
-        draft, review = final
-        print("\n" + ("Reply all" if draft["reply_all"] else f"Reply to {person}"))
-        print("=" * 70)
-        print(draft["body"])
-        print("=" * 70)
-        if draft["open_questions"]:
-            print("To fill in before sending:")
-            for question in draft["open_questions"]:
-                print(f"  - {question}")
-
-        if not review.approved:
-            print(f"\nNot saved: the Critic still found problems after {MAX_REVIEWS} reviews.")
-        elif args.save:
-            saved = as_data(await gmail.call_tool(
-                "create_reply_draft", {"thread_id": thread_id, "body": draft["body"], "reply_all": draft["reply_all"]}
-            ))
-            cc = f", cc {saved['cc']}" if saved["cc"] else ""
-            print(f"\nSaved as a draft to {saved['to']}{cc}. Open Gmail's Drafts to review and send it.")
+        try:
+            thread_id = args.thread or await find_thread(gmail, args.search)
+            drafted = await write_draft(gmail, claude, costs, thread_id, args.note)
+        except DrafterStopped as stopped:
+            # Exit only after leaving "async with": the MCP client wraps anything that leaves it,
+            # an exit included, in a group of errors, which Python prints as a long traceback.
+            problem = str(stopped)
         else:
-            print("\nApproved. Run again with --save to save it as a draft in Gmail.")
+            draft, review = drafted.draft, drafted.review
+            print("\n" + ("Reply all" if draft["reply_all"] else f"Reply to {drafted.person}"))
+            print("=" * 70)
+            print(draft["body"])
+            print("=" * 70)
+            if draft["open_questions"]:
+                print("To fill in before sending:")
+                for question in draft["open_questions"]:
+                    print(f"  - {question}")
 
-    total = sum(costs.dollars.values())
+            if drafted.hit_limit:
+                print(f"\nNot saved: it stopped at the ${COST_LIMIT:.2f} limit for one draft, before fixing the Critic's last problems.")
+            elif not review.approved:
+                print(f"\nNot saved: the Critic still found problems after {MAX_REVIEWS} reviews.")
+            elif args.save:
+                saved = as_data(await gmail.call_tool(
+                    "create_reply_draft", {"thread_id": thread_id, "body": draft["body"], "reply_all": draft["reply_all"]}
+                ))
+                cc = f", cc {saved['cc']}" if saved["cc"] else ""
+                print(f"\nSaved as a draft to {saved['to']}{cc}. Open Gmail's Drafts to review and send it.")
+            else:
+                print("\nApproved. Run again with --save to save it as a draft in Gmail.")
+
+    if problem:
+        sys.exit(problem)  # prints just the message, and the exit code says it didn't work
     parts = ", ".join(f"{model} ${dollars:.3f}" for model, dollars in costs.dollars.items())
-    print(f"Cost: ${total:.3f} ({parts})")
+    print(f"Cost: ${costs.total:.3f} ({parts})")
 
 
 if __name__ == "__main__":
