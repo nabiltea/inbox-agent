@@ -6,7 +6,7 @@ An AI agent that organizes my Gmail. It sorts every new email into my labels, wo
 
 ![A walk through the web page: sorting new emails, the to-do list, drafting a reply with the Drafter and the Critic, approving a new label, and the History page](docs/demo.gif)
 
-*The real app, with made-up emails and Claude's real answers to them. For this recording a stand-in took Gmail's place, so no real inbox was touched. 84 seconds, looping.*
+*The real app, with made-up emails and Claude's real answers to them. For this recording a stand-in took Gmail's place, so no real inbox was touched. About 3 minutes, looping.*
 
 ## How it works
 

@@ -1403,7 +1403,7 @@ The app only runs on my own computer, with my Gmail, so nobody else can see it w
 - **Result:**
   - **The paid take cost $0.024** for 10 answers from Claude: sorting 5 new emails cost $0.0023, and the draft $0.021. Real Claude found the interview invitation among the 5 and made it a to-do, and the Critic approved the reply on its first review.
   - **A second take, from the recording, cost nothing.** Its frames were identical, apart from clock times, which follow the time of the take.
-  - **The GIF:** 31 frames, 84 seconds, 1.1 MB.
+  - **The GIF:** 31 frames, about 3 minutes, 1.1 MB.
   - **A take without permission to pay** stopped at the first request to Claude with no recorded answer, and saved nothing.
   - **My real log and labels were unchanged** after every take, checked by reading the log without opening it for writing.
   - **Nothing private in the GIF.** `check_private.py` can't read pictures, so its rules checked everything the GIF can show: the made-up data and Claude's recorded answers. It found nothing private. A few common names and words in the demo also appear in my real data by coincidence, which I decided is fine, since everything in it is made up.
@@ -1411,6 +1411,7 @@ The app only runs on my own computer, with my Gmail, so nobody else can see it w
   - **Pillow's colour matching rounds,** so even white came out a slightly cream near-white. The script now matches the colours itself.
   - **`docs/setup.md` said a first `--apply` signs in to Gmail a second time,** for more permission. That stopped being true in Step 4c, when the app started asking for one permission from the start. Fixed.
   - **The Sort summary shows the cost to the cent,** so the demo's run of 5 emails says "$0.00". It really cost $0.0023.
+  - **The first GIF was too fast to follow,** and a GIF can't be paused or rewound. At 84 seconds, there wasn't time to read each caption and look at the page, especially for someone seeing it for the first time. Now each frame shows for 2 seconds to look at the page, plus the caption at 3 words a second. A frame that repeats the caption before it, like the steps of a sort, shows for 1.5 seconds. That makes about 3 minutes, and the file stays 1.1 MB, because only the timings changed. A video that can be paused comes after my week away.
 
 ## What's left
 
@@ -1497,6 +1498,7 @@ The app only runs on my own computer, with my Gmail, so nobody else can see it w
 - [x] Clean real details out of the Git history, in a new repo that can be public
 - [x] A check before every commit that refuses my private details, using a private word list and my own data
 - [x] A demo GIF of every page, with made-up emails and real answers from Claude, and the final README
+- [ ] The demo as a video with a player, so a viewer can pause it, go back and skip ahead. GitHub plays a video uploaded through its website (up to 10 MB on a free account, H.264 MP4 recommended). Its docs don't say whether a video file in the repo plays in a README, so test that first
 - [ ] **Step 8:** accuracy tests (evals), built from my own corrections in the log
 - [ ] Keep upcoming trips and events on the list as reminders, which would be a change to the full read's rules (see "Reading the version of an email I see")
 - [ ] **Cost:** try prompt caching for triage's system prompt, which is the same for every email
