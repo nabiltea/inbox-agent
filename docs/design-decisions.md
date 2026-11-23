@@ -20,7 +20,7 @@ flowchart TD
     A --> W
 ```
 
-Built: `gmail_client.py`, Triage (including applying labels in Gmail), the Label Designer, the SQLite log, the backlog sorter, the Gmail MCP server, the Drafter and the Critic, and the web page's home, Action needed, Unsorted and History pages. The web page can write a draft and show each step as it happens, but saving it to Gmail from the page isn't built yet, so saved drafts come from `drafter.py --save` for now.
+Built: `gmail_client.py`, Triage (including applying labels in Gmail), the Label Designer, the SQLite log, the backlog sorter, the Gmail MCP server, the Drafter and the Critic, and the web page's home, Action needed, Unsorted and History pages. The web page writes a draft, shows each step as it happens, and lets me edit it and save it to my Gmail drafts.
 
 ### The Gmail MCP server's tools
 
@@ -80,7 +80,8 @@ The agent acts on its own when an action is low-risk and easy to undo. It needs 
 | Flag "needs reply" or "needs action" | Agent alone | It's only information |
 | Clear a to-do, as Done or Not needed | Me, on the page | Archives its emails, and can be undone. Not needed also records that Claude was wrong, beside its answer |
 | Create a new label | Agent suggests, I approve | Changes how every future email is sorted |
-| Draft a reply | Agent alone | It's only a draft |
+| Write a draft reply | Agent alone, when I press Write draft | It's only text on the page until I save it |
+| Save it to my Gmail drafts | Me, on the page, after reading the Critic's verdict | Only adds a draft, which I edit, send or delete myself in Gmail |
 | Send an email | Never the agent | Can't be undone |
 
 **Why the agent doesn't create labels by itself:** it only sees one email at a time, but a good label covers a pattern across many emails. Letting it create labels freely would lead to near-duplicates ("Job Alerts", "Job Notifications"), each new label would change where future emails go, and anyone who emails me could influence my inbox's structure. Instead, emails that fit no label go to "Unsorted" with a suggested label. The web page lists them, each with its suggestion, and I approve, edit or reject each one, or pick a label by hand.

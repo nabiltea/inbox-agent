@@ -385,6 +385,7 @@ def draft_page(request: Request, thread_id: str):
             request=request, name="draft.html", context={"active": "action_needed", "unknown": True}, status_code=404
         )
     thread, problem = drafting.read_conversation(thread_id)
+    messages = drafting.shown_messages(thread) if thread else []
     draft, _ = drafting.latest(thread_id)  # the newest draft for this conversation, from the log
     run = drafting.current()
     return templates.TemplateResponse(
@@ -395,15 +396,87 @@ def draft_page(request: Request, thread_id: str):
             "thread_id": thread_id,
             # Gmail's subject when it could be asked, and the log's otherwise
             "subject": thread["subject"] if thread else subject,
-            "messages": drafting.shown_messages(thread) if thread else [],
+            "messages": messages,
             "gone": problem == "gone",
             "gmail_problem": None if problem == "gone" else problem,  # for the notice in base.html
             "max_hints": drafting.MAX_HINTS,
             "gmail_address": saved_account(),  # for the "Open in Gmail" link, as on Action needed
-            "draft": draft,
-            "open_questions": json.loads(draft["open_questions"]) if draft and draft["open_questions"] else [],
             "run": run if run and run.running else None,  # a draft being written, for this conversation or another
             "problem": None,
+            # The box with the newest draft. Gmail is only asked who it goes to when the conversation could be read.
+            **draft_outcome(thread_id, draft, messages, ask_gmail=thread is not None),
+        },
+    )
+
+
+def draft_outcome(thread_id, draft, messages=(), text=None, save_problem=None, ask_gmail=True):
+    """What the box with the newest draft shows (_draft_outcome.html), on the draft page and after Save.
+
+    For a finished draft that isn't saved yet, it asks Gmail who a draft saved now would go to,
+    and whether a message arrived after it was written. text is what to put in the edit box,
+    like my edits after a Save that didn't work. Otherwise the box gets the Drafter's text,
+    without invisible characters.
+    """
+    unsaved = draft is not None and draft["status"] == "finished" and not draft["saved_at"]
+    who, who_problem = drafting.check_recipients(thread_id, bool(draft["reply_all"])) if unsaved and ask_gmail else (None, None)
+    reviewed = drafting.clean_draft(draft["body"]) if draft is not None and draft["body"] else ""
+    if draft is not None and draft["saved_at"]:
+        text = draft["saved_body"]
+    elif text is None:
+        text = reviewed
+    return {
+        "draft": draft,
+        "open_questions": json.loads(draft["open_questions"]) if draft is not None and draft["open_questions"] else [],
+        "problems": [
+            {"kind": drafting.PROBLEM_KINDS.get(p["kind"], "Other"), "detail": p["detail"]}
+            for p in (json.loads(draft["problems"]) if draft is not None and draft["problems"] else [])
+        ],
+        "text": text,
+        "edited": draft is not None and bool(draft["saved_at"]) and drafting.clean_draft(text) != reviewed,
+        "placeholders": drafting.placeholders(text),
+        "who": who,
+        "who_problem": who_problem,
+        "newer": unsaved and drafting.arrived_since(messages, draft),
+        "save_problem": save_problem,
+    }
+
+
+@app.post("/action-needed/{thread_id}/draft/{draft_id}/save")
+def save_draft(request: Request, thread_id: str, draft_id: int, text: Annotated[str, Form()] = ""):
+    """The Save button: put the draft, as it is in the box, in my Gmail drafts, and draw the box again.
+
+    It only ever adds a draft: nothing here can send or delete an email. When it doesn't work, the
+    box comes back with my text as I left it, and says why.
+    """
+    problem = None
+    try:
+        drafting.save(thread_id, draft_id, text)
+    except drafting.NotSavedError as error:
+        problem = f"Not saved: {error}"
+    except SignInNeededError:
+        problem = ("Not saved: Gmail needs you to sign in again. Signing in leaves this page, so copy "
+                   "any changes you've made first, then reload the page.")
+    except EmailGoneError:
+        problem = "Not saved: this conversation isn't in Gmail any more."
+    except drafting.SavedButNotLoggedError:
+        problem = ("Saved in your Gmail drafts, but the log couldn't record it, so this page doesn't know. "
+                   "Pressing Save again would make a second draft. The details are in the server's log.")
+    except Exception as error:
+        log.exception("Couldn't save a draft")
+        problem = f"Not saved: {sorting.explain(error)} Nothing was saved, so pressing Save again finishes the job."
+    with closing(database.connect()) as conn:
+        draft = database.get_draft(conn, draft_id)
+    if draft is None or draft["thread_id"] != thread_id:
+        return Response("This draft isn't in the log.", status_code=404)
+    return templates.TemplateResponse(
+        request=request,
+        name="_draft_outcome.html",
+        context={
+            "thread_id": thread_id,
+            "gmail_address": saved_account(),
+            "run": None,
+            "answer": True,  # with the note beside the Write button
+            **draft_outcome(thread_id, draft, text=None if draft["saved_at"] else text, save_problem=problem),
         },
     )
 
@@ -414,6 +487,8 @@ def start_drafting(request: Request, thread_id: str, hints: Annotated[str, Form(
     """Start writing a draft, unless one is being written, and answer straight away with how it's going."""
     with closing(database.connect()) as conn:
         subject = database.conversation_subject(conn, thread_id)
+        # The button comes back with the answer, called "Write again" once this conversation has a draft
+        again = database.latest_draft(conn, thread_id) is not None
     if subject is None:
         return Response("The agent hasn't sorted this conversation.", status_code=404)
     hints = hints.strip()
@@ -423,12 +498,13 @@ def start_drafting(request: Request, thread_id: str, hints: Annotated[str, Form(
     else:
         try:
             run = drafting.start(thread_id, subject, hints)
+            again = True
         except drafting.BusyError as busy:
             run = busy.run  # the other conversation's: it greys out the button, and its progress stays on its own page
             problem = f'Not started: a reply to "{busy.run.subject}" is being written. Try again once it has finished.'
     return templates.TemplateResponse(
         request=request, name="_draft_progress.html",
-        context={"run": run, "thread_id": thread_id, "problem": problem, "answer": True},  # answer: with the Write button
+        context={"run": run, "thread_id": thread_id, "problem": problem, "answer": True, "again": again},  # answer: with the button
     )
 
 
@@ -439,7 +515,8 @@ def draft_progress(request: Request, thread_id: str):
     if run is None or not run.running or run.thread_id != thread_id:
         return Response(headers={"HX-Refresh": "true"})
     return templates.TemplateResponse(
-        request=request, name="_draft_progress.html", context={"run": run, "thread_id": thread_id, "problem": None, "answer": True},
+        request=request, name="_draft_progress.html",
+        context={"run": run, "thread_id": thread_id, "problem": None, "answer": True, "again": True},
         headers={"Cache-Control": "no-store"},
     )
 

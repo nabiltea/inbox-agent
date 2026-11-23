@@ -689,6 +689,26 @@ def latest_draft(conn, thread_id):
     return conn.execute("SELECT * FROM drafts WHERE thread_id = ? ORDER BY id DESC LIMIT 1", (thread_id,)).fetchone()
 
 
+def get_draft(conn, draft_id):
+    """One draft by its ID, or None."""
+    return conn.execute("SELECT * FROM drafts WHERE id = ?", (draft_id,)).fetchone()
+
+
+def save_draft_to_gmail(conn, draft_id, text, saved):
+    """Record that a draft is now in my Gmail drafts: when, the text I saved (which may be my edit of the
+    Drafter's), and Gmail's ID for it with who it goes to. saved is what gmail_client.create_reply_draft() returns.
+    "saved_at IS NULL" makes sure a draft is only ever recorded as saved once.
+    """
+    conn.execute(
+        """
+        UPDATE drafts SET saved_at = ?, saved_body = ?, gmail_draft_id = ?, saved_to = ?, saved_cc = ?
+        WHERE id = ? AND saved_at IS NULL
+        """,
+        (datetime.now().isoformat(timespec="seconds"), text, saved["draft_id"], saved["to"], saved["cc"], draft_id),
+    )
+    conn.commit()
+
+
 def forget_emails(conn, message_ids):
     """Forget some emails, so they get sorted again next time. Their full reads and crossed-out changes go with them."""
     question_marks = ", ".join("?" * len(message_ids))  # one per email, so the IDs still go in as values, never as SQL

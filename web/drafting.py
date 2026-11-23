@@ -15,6 +15,7 @@ import asyncio
 import logging
 import re
 import threading
+import unicodedata
 from contextlib import closing
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -30,9 +31,11 @@ from gmail_client import (
     GoogleTemporaryError,
     GoogleUnreachableError,
     SignInNeededError,
+    create_reply_draft,
     explain_failures,
     get_gmail_service,
     get_thread,
+    reply_recipients,
 )
 from web.sorting import explain
 
@@ -44,6 +47,13 @@ MAX_HINTS = 2000
 
 # How much of a folded message's text its one line shows. The page cuts it shorter to fit.
 PREVIEW_LENGTH = 150
+
+# The longest draft Save takes, in characters: far more than a reply needs, so it only stops a mistake.
+MAX_DRAFT = 20_000
+
+# A placeholder the Drafter leaves for me to fill in, like [your availability]: square brackets
+# around up to 100 characters on one line.
+PLACEHOLDER = re.compile(r"\[[^\[\]\n]{1,100}\]")
 
 
 @dataclass
@@ -61,19 +71,16 @@ class ShownMessage:
     answered: bool  # the message the reply answers
 
 
-def read_conversation(thread_id):
-    """Read a conversation from Gmail for the draft page, which costs nothing.
+def _ask_gmail(question):
+    """Ask Gmail something for the draft page, which costs nothing. question gets a Gmail connection.
 
-    Returns (the conversation, None), or (None, problem), where problem is "sign_in",
-    "offline" or "google_problem", like on every page, or "gone" if Gmail doesn't have it.
-    The conversation is what gmail_client.get_thread() returns, the same as the Drafter gets.
-    It asks Gmail once: when Gmail refuses for a moment, the page says so straight away,
-    rather than loading for minutes while get_thread() waits to try again.
+    Returns (the answer, None), or (None, problem), where problem is "sign_in", "offline" or
+    "google_problem", like on every page, or "gone" if Gmail doesn't have the conversation.
     """
     try:
         service = get_gmail_service(allow_browser_sign_in=False)
         with explain_failures():
-            return get_thread(service, thread_id, attempts=1), None
+            return question(service), None
     except SignInNeededError:
         return None, "sign_in"
     except GoogleUnreachableError:
@@ -82,6 +89,24 @@ def read_conversation(thread_id):
         return None, "google_problem"
     except EmailGoneError:
         return None, "gone"
+
+
+def read_conversation(thread_id):
+    """Read a conversation for the draft page: what gmail_client.get_thread() returns, the same as the Drafter gets.
+
+    It asks Gmail once: when Gmail refuses for a moment, the page says so straight away,
+    rather than loading for minutes while get_thread() waits to try again.
+    Returns (the conversation, None) or (None, problem), as _ask_gmail() says.
+    """
+    return _ask_gmail(lambda service: get_thread(service, thread_id, attempts=1))
+
+
+def check_recipients(thread_id, reply_all):
+    """Who a draft saved now would go to, {"to": ..., "cc": ...}, built the way Save builds it.
+
+    Returns (who, None) or (None, problem), as _ask_gmail() says.
+    """
+    return _ask_gmail(lambda service: reply_recipients(service, thread_id, reply_all))
 
 
 def shown_messages(thread):
@@ -305,3 +330,77 @@ async def _write_with_claude(run, hints):
         except drafter.DrafterStopped as stopped:
             return None, str(stopped)
     return drafted, None
+
+
+# --- Editing and saving the draft -------------------------------------------------------------
+
+def clean_draft(text):
+    """A draft's text without invisible characters, keeping its line breaks and tabs.
+
+    remove_invisible() in full_read.py also turns line breaks into spaces, which suits a one-line
+    to-do but not a letter. A browser sends a text box's line breaks as "\\r\\n", which become plain ones.
+    """
+    lines = (text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    kept = ("".join(c for c in line if c == "\t" or not unicodedata.category(c).startswith("C")) for line in lines)
+    return "\n".join(kept).strip()
+
+
+def placeholders(text):
+    """How many [placeholders] are still in a draft's text."""
+    return len(PLACEHOLDER.findall(text or ""))
+
+
+def arrived_since(messages, draft):
+    """Whether any message in the conversation is newer than the draft, judged to the minute.
+
+    Gmail's reply answers the newest message from someone else when I press Save, so after a new
+    message the draft could go to someone else, or miss what they just said. Messages come with
+    their minute, so one in the same minute as Write draft doesn't count.
+    """
+    started = draft["started_at"][:16]  # like "2026-11-23T10:00", the same form as a message's date
+    return any(message.date[:16] > started for message in messages)
+
+
+class NotSavedError(RuntimeError):
+    """The draft can't be saved. The message says why, in words for the page."""
+
+
+class SavedButNotLoggedError(RuntimeError):
+    """Gmail has the draft, but the log couldn't record it."""
+
+
+_save_lock = threading.Lock()  # so eight clicks at the same moment make one Gmail draft
+
+
+def save(thread_id, draft_id, text):
+    """Save a draft to my Gmail drafts, as the text in the box, and return its row in the log afterwards.
+
+    Gmail first, then the log, like every button. A draft is saved once: the lock and the check that
+    it isn't saved yet make eight clicks one Gmail draft, and a click on a saved draft just shows it
+    as saved. Raises NotSavedError when it can't be saved, and lets Gmail's errors through for the
+    page to explain. Nothing here can send or delete an email.
+    """
+    text = clean_draft(text)
+    with _save_lock:
+        with closing(database.connect()) as conn:
+            row = database.get_draft(conn, draft_id)
+        if row is None or row["thread_id"] != thread_id:
+            raise NotSavedError("this draft isn't in the log.")
+        if row["saved_at"]:
+            return row
+        if row["status"] != "finished" or not row["body"]:
+            raise NotSavedError("there's no finished draft to save.")
+        if not text:
+            raise NotSavedError("the draft is empty.")
+        if len(text) > MAX_DRAFT:
+            raise NotSavedError(f"a draft can be up to {MAX_DRAFT:,} characters, and this one has {len(text):,}.")
+        service = get_gmail_service(allow_browser_sign_in=False)
+        with explain_failures():
+            saved = create_reply_draft(service, thread_id, text, bool(row["reply_all"]))
+        try:
+            with closing(database.connect()) as conn:
+                database.save_draft_to_gmail(conn, draft_id, text, saved)
+                return database.get_draft(conn, draft_id)
+        except Exception as error:
+            log.exception("Gmail saved draft %s, but the log couldn't record it", draft_id)
+            raise SavedButNotLoggedError(saved) from error

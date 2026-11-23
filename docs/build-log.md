@@ -1309,6 +1309,41 @@ The Drafter and the Critic have worked from the terminal since Step 6. This piec
   - **Watching it in a browser found two things the tests hadn't:** the button looked pressable again during a draft, and the previous draft's outcome stayed on the page under the new progress. Both are fixed, with tests.
   - **Test servers must not share ports.** My deliberate breaks start a test server each on numbered ports, and my browser test server used one of the same numbers, so a click in the browser landed in one of those tests. Nothing real was touched, because every test uses its own copy of the log and a fake Claude. The browser server now uses a port of its own, and the breaks ran again cleanly.
 
+**Part 4: the verdict, editing, and Save to Gmail drafts**
+- **Decided:**
+  - **The Critic's verdict above the draft:** green when it approved, amber with each problem in plain words when it didn't, or when the $0.50 limit stopped it first.
+  - **The draft in an edit box,** without invisible characters but with its line breaks, and what I still have to fill in underneath.
+  - **One Save button, saved once:** "Save to Gmail drafts" when approved, "Save anyway" when not. Gmail first, then the log, like every button. Eight clicks make one Gmail draft, and after saving, the box locks and says where the draft went. It only ever adds a draft: nothing can send or delete one.
+  - **Who it goes to, shown before saving,** worked out by the same code that builds the Gmail draft, so it's exactly who will get it, with Reply all's cc.
+  - **A warning when a message arrived after the draft was written.** Gmail's reply answers the newest message from someone else at the moment I save, so a new message could change who gets the reply, or leave what they just said unanswered.
+  - **My edits:** a note beside Save says the Critic checked the draft as written, not my changes. After saving, the page says whether I saved it as reviewed or with my changes, and the log keeps the Drafter's text and mine side by side.
+  - **Placeholders left in when saving** don't stop it: the page says how many are still to fill in. Filling them in Gmail is often easier.
+  - **Write again** is the button's name once a draft exists. It stays after saving, and the note beside it says the saved draft stays in Gmail until I delete it there.
+  - **When saving doesn't work,** the box comes back with my text as I left it and says why, in plain words. If Gmail saved the draft but the log couldn't record it, the page says so, because pressing Save again would make a second draft.
+- **Built:**
+  - In `gmail_client.py`: `reply_recipients()`, which builds the reply exactly as `create_reply_draft()` does, without saving it. Both share the code that builds the reply.
+  - In `web/drafting.py`: `clean_draft()`, `placeholders()`, `arrived_since()` and `save()`, with its lock.
+  - In `database.py`: recording a saved draft, once.
+  - In `web/app.py`: the Save address, and what the draft's box shows. The templates `_draft_outcome.html` and `_write_note.html`.
+- **Learned:**
+  - **Previewing an action with the code that will carry it out.** "Who it goes to" comes from the same function that builds the Gmail draft, rather than a second guess at the same rules, so the preview can't drift from what really happens.
+  - **A form's text box sends line breaks as "\r\n".** Comparing my edits with the Drafter's text, or counting lines, needs them made plain first.
+  - **Keep what the person typed when something fails.** A failed Save redraws the box from the text that was sent, not from the log, so a Gmail hiccup never costs me my edits.
+- **Result,** with no money spent:
+  - **86 checks on a copy of my log, with a stand-in for Gmail's API under the real code that builds the email.** The test reads back exactly what Gmail would get:
+    - To, Cc, the subject and the headers that keep the reply in the conversation;
+    - my edited text, cleaned;
+    - every state of the box, Reply all, a new message after the draft, and 8 clicks at once;
+    - five kinds of Gmail failure with my text kept, the log failing after Gmail saved, and refused saves;
+    - text trying to be code or to break out of the box, a forged click, no code that can send or delete, and the real log untouched.
+  - **The code that saves a Gmail draft, committed and new, side by side on 16 cases:** the same email, byte for byte, so Claude Desktop's tool and `drafter.py --save` are unchanged.
+  - **Part 2's and part 3's checks pass again.**
+  - **Breaking the code on purpose:** 19 different breaks each made tests fail.
+  - **In a real browser with made-up emails and a stand-in Gmail:** write, edit, save, at desktop and phone width, with no console errors.
+- **Found:**
+  - **Watching it in the browser found one more stale part of the page:** after Save, the note beside Write still said unsaved changes would be lost. Save's answer now brings the updated note too.
+  - **A refused Save on a draft that had stopped didn't say why,** because only a finished draft's box had room for the message. Only an out-of-date page can do that, but it now says why too.
+
 ## What's left
 
 - [x] **Step 1:** First call to Claude
@@ -1383,7 +1418,7 @@ The Drafter and the Critic have worked from the terminal since Step 6. This piec
   - [x] part 1: the Drafter's work as a function the page can call, with a $0.50 limit per draft and up-to-date prices
   - [x] part 2: the drafts table in the log, the "Draft reply" button and the draft page
   - [x] part 3: the Drafter on a second thread, with each step shown live
-  - [ ] part 4: the draft with the Critic's verdict, editing, and saving to Gmail drafts
+  - [x] part 4: the draft with the Critic's verdict, editing, and saving to Gmail drafts
   - [ ] part 5: the home page's count of drafts waiting in Gmail, and a "Draft saved" tag on Action needed
 - [ ] A double-click shortcut that starts the web page, so opening it doesn't need VS Code
 - [ ] Decide whether to move the Google app from "Testing" to "In production", which would end the weekly sign-in (first check Google's rules for unverified apps that use Gmail)

@@ -1,0 +1,12 @@
+{# Beside the Write button: what a draft costs, and what writing again does to the one on the page. Saving
+   changes what it says, so Save's answer brings a new copy (oob, "out of band"), which HTMX swaps in here. #}
+<span id="write-note" class="text-sm text-gray-500"{% if oob %} hx-swap-oob="true"{% endif %}>
+  {% if run and run.thread_id != thread_id %}
+    A reply to "{{ run.subject }}" is being written.
+    <a href="{{ url_for('draft_page', thread_id=run.thread_id).path }}" class="text-blue-600 hover:underline">See it</a>
+  {% else %}
+    About 5 to 20 cents.
+    {% if draft and draft.saved_at %}Writing again makes a new draft. The saved one stays in Gmail until you delete it there.
+    {% elif draft %}Writing again replaces this draft on the page (the log keeps it), and changes you haven't saved are lost.{% endif %}
+  {% endif %}
+</span>

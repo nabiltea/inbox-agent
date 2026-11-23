@@ -1,0 +1,102 @@
+{# The box with the conversation's newest draft, under the hints: how it ended, the Critic's verdict, the draft
+   in an edit box with Save, and once it's saved, where it went. Save's answer replaces this whole box
+   (hx-target), so a click that doesn't work brings back my text as I left it, with the reason.
+   Everything in it is escaped, as on every page: the draft and the Critic's words came from models that
+   read an outside email. The answer to Write draft empties this box (see _draft_progress.html). #}
+{% from "_macros.html" import open_in_gmail %}
+{% set button_style = "rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50" %}
+<div id="draft-outcome">
+{% if draft and not (run and run.thread_id == thread_id) %}
+  <div class="mt-4 rounded-lg bg-white p-5 shadow-sm">
+
+    {% if draft.status != "finished" %}
+      {# No draft to show: it stopped, failed or was cut off #}
+      <p class="font-medium">
+        {% if draft.status == "stopped" %}Stopped: {{ draft.problem }}
+        {% elif draft.status == "interrupted" %}Interrupted: {{ draft.problem }}
+        {% else %}Couldn't finish: {{ draft.problem }}{% endif %}
+      </p>
+      <p class="mt-0.5 text-sm text-gray-500">Started {{ draft.started_at|show_logged_moment }} · cost {{ "$%.2f"|format(draft.cost or 0) }}</p>
+      {# Only from a page that was out of date: a Save pressed on a draft that, in the log, never finished #}
+      {% if save_problem %}
+        <p class="mt-3 rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-900" role="status">{{ save_problem }}</p>
+      {% endif %}
+
+    {% else %}
+      {# The Critic's verdict: green when it approved, amber with its problems when it didn't #}
+      {% if draft.approved %}
+        <div class="rounded-md border border-green-300 bg-green-50 px-4 py-3 text-sm text-green-900">
+          <p class="font-medium">The Critic approved it after {{ draft.reviews }} {{ "review" if draft.reviews == 1 else "reviews" }}</p>
+          <p class="mt-0.5">{{ draft.summary }}</p>
+        </div>
+      {% else %}
+        <div class="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <p class="font-medium">
+            {% if draft.hit_limit %}Stopped at the $0.50 limit for one draft, before these problems were fixed
+            {% else %}The Critic still found problems after {{ draft.reviews }} reviews{% endif %}
+          </p>
+          <p class="mt-0.5">{{ draft.summary }}</p>
+          {% if problems %}
+            <ul class="mt-2 list-disc space-y-0.5 pl-5">
+              {% for p in problems %}<li><span class="font-medium">{{ p.kind }}:</span> {{ p.detail }}</li>{% endfor %}
+            </ul>
+          {% endif %}
+        </div>
+      {% endif %}
+      <p class="mt-2 text-sm text-gray-500">Started {{ draft.started_at|show_logged_moment }} · cost {{ "$%.2f"|format(draft.cost or 0) }}</p>
+
+      {% if draft.saved_at %}
+        {# Saved: the box is locked, and says where the draft went #}
+        <div class="mt-3 rounded-md border border-green-300 bg-green-50 px-4 py-3 text-sm text-green-900" role="status">
+          <p class="font-medium">Saved to your Gmail drafts, in this conversation, {{ draft.saved_at|show_logged_moment }}</p>
+          <p class="mt-0.5">To {{ draft.saved_to }}{% if draft.saved_cc %} · cc {{ draft.saved_cc }}{% endif %}</p>
+          <p class="mt-0.5">
+            {% if edited %}With your changes: the Critic reviewed the earlier version.{% else %}As the Critic reviewed it.{% endif %}
+            {% if placeholders %}It still has {{ placeholders }} [{{ "placeholder" if placeholders == 1 else "placeholders" }}] to fill in before sending.{% endif %}
+          </p>
+          {% if gmail_address %}<p class="mt-1">{{ open_in_gmail(thread_id, gmail_address) }}</p>{% endif %}
+        </div>
+        <p class="mt-3 whitespace-pre-wrap wrap-break-word rounded-md border border-gray-200 bg-gray-50 px-4 py-3 text-sm">{{ text }}</p>
+
+      {% else %}
+        {# Not saved yet: who it would go to, then the draft in an edit box with Save #}
+        {% if newer %}
+          <div class="mt-3 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900" role="status">
+            A new message arrived after this draft was written. Gmail's reply answers the newest message from someone else,
+            so write again, or check who it goes to below.
+          </div>
+        {% endif %}
+        <p class="mt-3 text-sm">
+          {% if who %}
+            <span class="text-gray-500">To</span> {{ who.to }}{% if who.cc %} · <span class="text-gray-500">cc</span> {{ who.cc }}{% endif %}
+          {% elif who_problem %}
+            <span class="text-gray-500">Gmail couldn't be asked who it goes to right now.</span>
+          {% endif %}
+        </p>
+        <form hx-post="{{ url_for('save_draft', thread_id=thread_id, draft_id=draft.id).path }}" hx-target="#draft-outcome" hx-swap="outerHTML">
+          <label for="draft-text" class="sr-only">The draft</label>
+          <textarea id="draft-text" name="text" rows="{{ [[text.count('\n') + 3, 8]|max, 30]|min }}" maxlength="20000"
+                    class="mt-2 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900">{{ text }}</textarea>
+          {% if open_questions %}
+            <p class="mt-2 text-sm font-medium">To fill in before sending</p>
+            <ul class="mt-1 list-disc pl-5 text-sm">
+              {% for question in open_questions %}<li>{{ question }}</li>{% endfor %}
+            </ul>
+          {% endif %}
+          {% if save_problem %}
+            <p class="mt-3 rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-900" role="status">{{ save_problem }}</p>
+          {% endif %}
+          <div class="mt-3 flex flex-wrap items-center gap-3">
+            <button type="submit" hx-disabled-elt="this" class="{{ button_style }}">
+              {{ "Save to Gmail drafts" if draft.approved else "Save anyway" }}
+            </button>
+            <span class="text-sm text-gray-500">The Critic checked the draft as written, not your changes. It's only saved as a draft: never sent.</span>
+          </div>
+        </form>
+      {% endif %}
+    {% endif %}
+  </div>
+{% endif %}
+</div>
+{# In Save's answer, the note beside the Write button too, which now says the saved draft stays in Gmail #}
+{% if answer %}{% with oob=True %}{% include "_write_note.html" %}{% endwith %}{% endif %}

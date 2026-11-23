@@ -466,16 +466,31 @@ def get_message(service, message_id, link_hosts=False):
 
 def create_reply_draft(service, thread_id, body, reply_all=False):
     """Save a reply to a conversation as a draft. It's never sent: I review and send drafts myself."""
-    thread = service.users().threads().get(
-        userId="me", id=thread_id, format="metadata",
-        metadataHeaders=["From", "To", "Cc", "Reply-To", "Subject", "Message-ID", "References"],
-    ).execute()
-    reply = build_reply(thread["messages"], get_my_address(service), body, reply_all)
+    reply = _reply_to(service, thread_id, body, reply_all)
     raw = base64.urlsafe_b64encode(reply.as_bytes()).decode()
     draft = service.users().drafts().create(
         userId="me", body={"message": {"raw": raw, "threadId": thread_id}}
     ).execute()
     return {"draft_id": draft["id"], "to": reply["To"], "cc": reply["Cc"] or "", "subject": reply["Subject"]}
+
+
+def reply_recipients(service, thread_id, reply_all=False):
+    """Who a reply to this conversation would go to, without saving anything: {"to": ..., "cc": ...}.
+
+    It builds the reply the same way create_reply_draft() does, so it's exactly who a draft
+    saved now would go to. The web page shows it before I press Save.
+    """
+    reply = _reply_to(service, thread_id, "", reply_all)
+    return {"to": reply["To"], "cc": reply["Cc"] or ""}
+
+
+def _reply_to(service, thread_id, body, reply_all):
+    """A reply to the conversation as it is in Gmail right now (see build_reply)."""
+    thread = service.users().threads().get(
+        userId="me", id=thread_id, format="metadata",
+        metadataHeaders=["From", "To", "Cc", "Reply-To", "Subject", "Message-ID", "References"],
+    ).execute()
+    return build_reply(thread["messages"], get_my_address(service), body, reply_all)
 
 
 def build_reply(messages, my_address, body, reply_all=False):
