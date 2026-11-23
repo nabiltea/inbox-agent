@@ -1,4 +1,5 @@
-{# The draft page for one conversation: the conversation, read from Gmail, and a box for my hints.
+{# The draft page for one conversation: the conversation, read from Gmail, a box for my hints, how the
+   draft being written is going, and how the newest draft ended.
    It fills the slots in base.html. The conversation runs oldest first, like Gmail. The message the
    reply answers is open and marked, and so is the newest. The rest are folded to one line.
    Email text is shown exactly as the Drafter gets it, escaped like everything on every page, and a
@@ -72,21 +73,66 @@
         {% endfor %}
       </ol>
 
-      {# The hints box. Write draft starts working in part 3 of piece 6, so for now it's greyed out. #}
-      <div class="mt-4 rounded-lg bg-white p-5 shadow-sm">
+      {# The hints box. Write draft sends the hints and the answer replaces the progress box below.
+         The hints of the newest draft come back in the box, ready to change and write again. #}
+      <form class="mt-4 rounded-lg bg-white p-5 shadow-sm"
+            hx-post="{{ url_for('start_drafting', thread_id=thread_id).path }}" hx-target="#draft-progress" hx-swap="outerHTML">
         <label for="hints" class="font-medium">Your hints for the Drafter</label>
         <p class="mt-0.5 text-sm text-gray-500">
           What the reply should say, like "say Wednesday works". Without hints, the Drafter leaves every decision to you as a [placeholder].
         </p>
         <textarea id="hints" name="hints" rows="3" maxlength="{{ max_hints }}"
-                  class="mt-2 w-full rounded-md border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900"></textarea>
+                  class="mt-2 w-full rounded-md border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900">{{ draft.hints if draft and draft.hints else "" }}</textarea>
         <div class="mt-2 flex flex-wrap items-center gap-3">
-          <button type="button" disabled
-                  class="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50">
-            Write draft
-          </button>
-          <span class="text-sm text-gray-500">About 5 to 20 cents · works from part 3</span>
+          {% include "_draft_write_button.html" %}
+          <span class="text-sm text-gray-500">
+            {% if run and run.thread_id != thread_id %}
+              A reply to "{{ run.subject }}" is being written.
+              <a href="{{ url_for('draft_page', thread_id=run.thread_id).path }}" class="text-blue-600 hover:underline">See it</a>
+            {% else %}
+              About 5 to 20 cents
+            {% endif %}
+          </span>
         </div>
+      </form>
+
+      {% include "_draft_progress.html" %}
+
+      {# How the newest draft ended, once it's no longer being written. Part 4 of piece 6 adds the
+         Critic's notes, editing and saving to Gmail. The answer to Write draft empties this box
+         (see _draft_progress.html), so an older draft doesn't sit under the new one being written. #}
+      <div id="draft-outcome">
+      {% if draft and not (run and run.thread_id == thread_id) %}
+        <div class="mt-4 rounded-lg bg-white p-5 shadow-sm">
+          <p class="font-medium">
+            {% if draft.status == "finished" and draft.approved %}
+              The Critic approved this draft after {{ draft.reviews }} {{ "review" if draft.reviews == 1 else "reviews" }}.
+            {% elif draft.status == "finished" and draft.hit_limit %}
+              Stopped at the $0.50 limit for one draft, before the Critic's last problems were fixed.
+            {% elif draft.status == "finished" %}
+              The Critic still found problems after {{ draft.reviews }} reviews.
+            {% elif draft.status == "stopped" %}
+              Stopped: {{ draft.problem }}
+            {% elif draft.status == "interrupted" %}
+              Interrupted: {{ draft.problem }}
+            {% else %}
+              Couldn't finish: {{ draft.problem }}
+            {% endif %}
+          </p>
+          <p class="mt-0.5 text-sm text-gray-500">
+            Started {{ draft.started_at|show_logged_moment }} · cost {{ "$%.2f"|format(draft.cost or 0) }} · nothing saved to Gmail yet
+          </p>
+          {% if draft.body %}
+            <p class="mt-3 whitespace-pre-wrap wrap-break-word rounded-md border border-gray-200 px-4 py-3 text-sm">{{ draft.body }}</p>
+            {% if open_questions %}
+              <p class="mt-3 text-sm font-medium">To fill in before sending</p>
+              <ul class="mt-1 list-disc pl-5 text-sm">
+                {% for question in open_questions %}<li>{{ question }}</li>{% endfor %}
+              </ul>
+            {% endif %}
+          {% endif %}
+        </div>
+      {% endif %}
       </div>
     {% endif %}
   {% endif %}

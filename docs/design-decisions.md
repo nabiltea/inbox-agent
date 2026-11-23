@@ -20,7 +20,7 @@ flowchart TD
     A --> W
 ```
 
-Built: `gmail_client.py`, Triage (including applying labels in Gmail), the Label Designer, the SQLite log, the backlog sorter, the Gmail MCP server, the Drafter and the Critic, and the web page's home, Action needed, Unsorted and History pages. Drafting from the web page isn't built yet, so drafts come from `drafter.py` for now.
+Built: `gmail_client.py`, Triage (including applying labels in Gmail), the Label Designer, the SQLite log, the backlog sorter, the Gmail MCP server, the Drafter and the Critic, and the web page's home, Action needed, Unsorted and History pages. The web page can write a draft and show each step as it happens, but saving it to Gmail from the page isn't built yet, so saved drafts come from `drafter.py --save` for now.
 
 ### The Gmail MCP server's tools
 

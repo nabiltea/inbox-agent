@@ -25,6 +25,7 @@ rebuilds the CSS every time a file is saved. (A public site would add --minify.)
 """
 
 import hashlib
+import json
 import logging
 import mimetypes
 import re
@@ -244,6 +245,7 @@ def home(request: Request):
         last_run = database.last_run_summary(conn)
         costs = database.sorting_costs(conn, since=month_start)
         read_costs = database.full_read_costs(conn, since=month_start)
+        draft_costs = database.drafting_costs(conn, since=month_start)
         unsorted = database.unsorted_count(conn)
     return templates.TemplateResponse(
         request=request,
@@ -261,8 +263,9 @@ def home(request: Request):
             "last_run_date": datetime.fromisoformat(last_run["started"]) if last_run else None,
             "costs": costs,
             "read_costs": read_costs,
-            "cost_this_month": costs["cost_since"] + read_costs["cost_since"],
-            "cost_total": costs["cost"] + read_costs["cost"],
+            "draft_costs": draft_costs,
+            "cost_this_month": costs["cost_since"] + read_costs["cost_since"] + draft_costs["cost_since"],
+            "cost_total": costs["cost"] + read_costs["cost"] + draft_costs["cost"],
             "gmail_problem": gmail_problem,  # None, or why Gmail couldn't be checked
             "message": _waiting.pop("message", None),  # shown once, after signing in
         },
@@ -382,6 +385,8 @@ def draft_page(request: Request, thread_id: str):
             request=request, name="draft.html", context={"active": "action_needed", "unknown": True}, status_code=404
         )
     thread, problem = drafting.read_conversation(thread_id)
+    draft, _ = drafting.latest(thread_id)  # the newest draft for this conversation, from the log
+    run = drafting.current()
     return templates.TemplateResponse(
         request=request,
         name="draft.html",
@@ -395,7 +400,47 @@ def draft_page(request: Request, thread_id: str):
             "gmail_problem": None if problem == "gone" else problem,  # for the notice in base.html
             "max_hints": drafting.MAX_HINTS,
             "gmail_address": saved_account(),  # for the "Open in Gmail" link, as on Action needed
+            "draft": draft,
+            "open_questions": json.loads(draft["open_questions"]) if draft and draft["open_questions"] else [],
+            "run": run if run and run.running else None,  # a draft being written, for this conversation or another
+            "problem": None,
         },
+    )
+
+
+# The Write draft button. The writing itself runs on a second thread (see drafting.py).
+@app.post("/action-needed/{thread_id}/draft/write")
+def start_drafting(request: Request, thread_id: str, hints: Annotated[str, Form()] = ""):
+    """Start writing a draft, unless one is being written, and answer straight away with how it's going."""
+    with closing(database.connect()) as conn:
+        subject = database.conversation_subject(conn, thread_id)
+    if subject is None:
+        return Response("The agent hasn't sorted this conversation.", status_code=404)
+    hints = hints.strip()
+    run, problem = None, None
+    if len(hints) > drafting.MAX_HINTS:
+        problem = f"Not started: hints can be up to {drafting.MAX_HINTS:,} characters, and these have {len(hints):,}."
+    else:
+        try:
+            run = drafting.start(thread_id, subject, hints)
+        except drafting.BusyError as busy:
+            run = busy.run  # the other conversation's: it greys out the button, and its progress stays on its own page
+            problem = f'Not started: a reply to "{busy.run.subject}" is being written. Try again once it has finished.'
+    return templates.TemplateResponse(
+        request=request, name="_draft_progress.html",
+        context={"run": run, "thread_id": thread_id, "problem": problem, "answer": True},  # answer: with the Write button
+    )
+
+
+@app.get("/action-needed/{thread_id}/draft/progress")
+def draft_progress(request: Request, thread_id: str):
+    """How the draft is going, which the page asks once a second. When it has ended, this tells the page to reload."""
+    run = drafting.current()
+    if run is None or not run.running or run.thread_id != thread_id:
+        return Response(headers={"HX-Refresh": "true"})
+    return templates.TemplateResponse(
+        request=request, name="_draft_progress.html", context={"run": run, "thread_id": thread_id, "problem": None, "answer": True},
+        headers={"Cache-Control": "no-store"},
     )
 
 

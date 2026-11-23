@@ -1,0 +1,8 @@
+{# The Write draft button, greyed out while a draft is being written, here or for another conversation.
+   hx-disabled-elt greys it out straight away when pressed, so a double click sends one request.
+   oob ("out of band"): when the answer to a click carries this button, HTMX swaps it in here,
+   greyed out, until the page reloads at the end. #}
+<button id="draft-write-button" type="submit" hx-disabled-elt="this"{% if run and run.running %} disabled{% endif %}{% if oob %} hx-swap-oob="true"{% endif %}
+        class="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50">
+  Write draft
+</button>

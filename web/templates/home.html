@@ -76,11 +76,12 @@
     <div class="flex flex-col rounded-lg bg-white p-5 shadow-sm">
       <p class="text-3xl font-semibold">{{ "$%.2f"|format(cost_this_month) }}</p>
       <p class="mt-1 font-medium">Claude's cost this month</p>
-      {# The split only appears once there are full reads: until then, it's all sorting #}
+      {# The split only appears once there are full reads or drafts: until then, it's all sorting #}
       <p class="mt-1 text-sm text-gray-500">
-        {% if read_costs.reads %}
+        {% if read_costs.reads or draft_costs.drafts %}
           {{ "$%.2f"|format(cost_total) }} in total: {{ "$%.2f"|format(costs.cost) }} for sorting {{ "{:,}".format(costs.emails) }} emails,
-          {{ "$%.2f"|format(read_costs.cost) }} for {{ "{:,}".format(read_costs.reads) }} full {{ "read" if read_costs.reads == 1 else "reads" }}
+          {{ "$%.2f"|format(read_costs.cost) }} for {{ "{:,}".format(read_costs.reads) }} full {{ "read" if read_costs.reads == 1 else "reads" }}{% if draft_costs.drafts %},
+          {{ "$%.2f"|format(draft_costs.cost) }} for {{ draft_costs.drafts }} {{ "draft" if draft_costs.drafts == 1 else "drafts" }}{% endif %}
         {% else %}
           {{ "$%.2f"|format(cost_total) }} in total, for {{ "{:,}".format(costs.emails) }} emails
         {% endif %}

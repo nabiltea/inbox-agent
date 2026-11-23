@@ -1276,6 +1276,39 @@ The Drafter and the Critic have worked from the terminal since Step 6. This piec
   - **A test wrote into my real log.** To break `database.py` on purpose, a test ran the whole file again in memory. That also ran its first lines again, which set the log's file name back to the real one, so the test's 11 made-up emails and an unfinished drafts table went into my log instead of the copy. The test noticed by itself: its copy had no drafts table. My own rows were untouched. After a backup, I removed exactly what the test had added, then compared every row with the backup made before this part: identical. Now the tests copy from that backup, point everything back at the copy after running a file again, check they're on the copy before writing anything, and end by checking that the real log hasn't changed.
   - **A hiccup at Gmail could make the page load for minutes,** because reading a conversation waited out Gmail's per-minute limit. A test with a stand-in for a Gmail hiccup found it, and the page now asks once (see Decided).
 
+**Part 3: Write draft, with each step shown live**
+- **Decided:**
+  - **The Drafter works on a second thread, like Sort.** A draft takes about a minute, too long for a page to wait, so Write draft answers straight away and the page asks how it's going once a second. One draft at a time for the whole app: eight quick clicks give one draft, and Write on another conversation meanwhile says which reply is being written. Sorting at the same time is fine.
+  - **The progress shows on that conversation's draft page only,** not on every page like Sort's: a draft is short, and it would be clutter elsewhere.
+  - **Each step in a plain sentence,** like "Searched your emails with them for "coffee"" or "The Critic found 1 problem", with the problems listed under it. To make that possible, `write_draft()` now reports each step as a small record of what happened (which tool, what it asked for, the Critic's verdict) instead of a finished line of text. The terminal turns each record into exactly the line it printed before, and the page into a sentence.
+  - **Every press gets a row in the drafts table,** with my hints, and its cost saved after every call to Claude. If the server stops partway, the page marks that draft "interrupted" the next time it finds it unfinished, and its cost still counts. The home page's cost card counts drafting from the first draft.
+  - **How it ended, in plain words:** approved, problems after 3 reviews, stopped at the $0.50 limit, stopped (like a refusal), interrupted, or failed with the reason (like a wrong API key or no credit). The page shows the draft's text and what to fill in. Part 4 turns it into an edit box with the Critic's notes and saving.
+  - **When the conversation can't be read,** like after Gmail's login has expired, drafting stops with the MCP server's own message before any call to Claude. The terminal used to crash with a confusing error there.
+- **Built:**
+  - In `drafter.py`: the step records (`ReadConversation`, `GotContext`, `LookedUp`, `Submitted`, `Reviewed`, `HitLimit`), and `terminal_lines()`, which prints them.
+  - In `web/drafting.py`: `describe()`, which turns a step into a sentence; `DraftRun` and `start()`, the run on its second thread with a lock; and a `CostTracker` that saves the cost to the log after every call.
+  - In `database.py`: functions to start, update, finish and read drafts, and drafting's costs.
+  - In `web/app.py`: the addresses for Write draft and its progress. The templates `_draft_progress.html` and `_draft_write_button.html`; the draft page shows how the newest draft ended, and the home page counts drafting.
+- **Learned:**
+  - **A thread with its own event loop.** The web server runs its own loop for requests, so the second thread calls `asyncio.run()` to get one of its own, in which it starts my MCP server in the background and talks to Claude, exactly as the terminal does.
+  - **Sending data rather than text.** When a function reports what it did as records instead of sentences, each caller can show it its own way. The terminal's output stayed byte for byte the same while the page got friendlier words.
+  - **Pattern matching with `match`.** `case LookedUp(tool="search_emails"):` picks a case by the kind of record and the value of one of its fields.
+  - **Swapping in more than one part of the page.** The answer to Write draft also carries a greyed-out button and an empty box where the older draft's outcome was ("out of band" swaps in HTMX), so the page never suggests pressing again or shows yesterday's draft under today's.
+- **Result,** with no money spent:
+  - **The terminal, side by side with the committed version** on part 1's 10 scripted conversations: the same output, exit codes and requests to Claude, byte for byte. The one intended difference is a conversation that can't be read, which now says so in one line.
+  - **77 checks on a copy of my log,** with my real MCP server code on made-up conversations and a fake connection to Claude that answers slowly:
+    - every sentence the page can show;
+    - a whole draft watched step by step, with its cost in the log growing after each call;
+    - 8 clicks at once, another conversation meanwhile, and drafting during a Sort;
+    - each way a draft can end, and one interrupted by a restart;
+    - model text trying to be code, hints that are too long, a forged click, and the real log untouched.
+  - **Part 1's and part 2's checks pass again** with the new step records and the working button.
+  - **Breaking the code on purpose:** 16 different breaks each made tests fail.
+  - **In a real browser with made-up emails and a slow fake Claude:** the steps arrive one by one, the button greys out, the older outcome steps aside, it fits a phone, and the console shows no errors.
+- **Found:**
+  - **Watching it in a browser found two things the tests hadn't:** the button looked pressable again during a draft, and the previous draft's outcome stayed on the page under the new progress. Both are fixed, with tests.
+  - **Test servers must not share ports.** My deliberate breaks start a test server each on numbered ports, and my browser test server used one of the same numbers, so a click in the browser landed in one of those tests. Nothing real was touched, because every test uses its own copy of the log and a fake Claude. The browser server now uses a port of its own, and the breaks ran again cleanly.
+
 ## What's left
 
 - [x] **Step 1:** First call to Claude
@@ -1349,7 +1382,7 @@ The Drafter and the Critic have worked from the terminal since Step 6. This piec
 - [ ] **Step 7, piece 6:** the draft flow: "Draft reply" with a hints box, the Critic's verdict, and saving to Gmail drafts, also when the Critic isn't satisfied, in five parts:
   - [x] part 1: the Drafter's work as a function the page can call, with a $0.50 limit per draft and up-to-date prices
   - [x] part 2: the drafts table in the log, the "Draft reply" button and the draft page
-  - [ ] part 3: the Drafter on a second thread, with each step shown live
+  - [x] part 3: the Drafter on a second thread, with each step shown live
   - [ ] part 4: the draft with the Critic's verdict, editing, and saving to Gmail drafts
   - [ ] part 5: the home page's count of drafts waiting in Gmail, and a "Draft saved" tag on Action needed
 - [ ] A double-click shortcut that starts the web page, so opening it doesn't need VS Code

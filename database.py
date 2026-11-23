@@ -626,6 +626,69 @@ def full_read_costs(conn, since):
     return {"reads_since": recent[0], "cost_since": recent[1], "reads": total[0], "cost": total[1]}
 
 
+def drafting_costs(conn, since):
+    """What drafting has cost in dollars, and how many drafts: since the given date, and in total.
+
+    Every press of Write draft counts, however it ended, because its calls to Claude were paid for.
+    """
+    recent = conn.execute(
+        "SELECT COUNT(*), COALESCE(SUM(cost), 0) FROM drafts WHERE started_at >= ?", (since.isoformat(),)
+    ).fetchone()
+    total = conn.execute("SELECT COUNT(*), COALESCE(SUM(cost), 0) FROM drafts").fetchone()
+    return {"drafts_since": recent[0], "cost_since": recent[1], "drafts": total[0], "cost": total[1]}
+
+
+def start_draft(conn, thread_id, subject, hints):
+    """Record a press of Write draft: a new row, "writing" until it ends. Returns the row's ID."""
+    cursor = conn.execute(
+        "INSERT INTO drafts (thread_id, subject, hints, started_at, status, cost) VALUES (?, ?, ?, ?, 'writing', 0)",
+        (thread_id, subject, hints, datetime.now().isoformat(timespec="seconds")),
+    )
+    conn.commit()
+    return cursor.lastrowid
+
+
+def save_draft_cost(conn, draft_id, cost):
+    """Record what a draft has cost so far. It's saved after every call to Claude, so a draft cut off halfway still counts."""
+    conn.execute("UPDATE drafts SET cost = ? WHERE id = ?", (cost, draft_id))
+    conn.commit()
+
+
+def finish_draft(conn, draft_id, drafted, cost):
+    """Record the draft the Critic reviewed last, approved or not. drafted is what drafter.write_draft() hands back."""
+    review = drafted.review
+    conn.execute(
+        """
+        UPDATE drafts SET status = 'finished', cost = ?, body = ?, open_questions = ?, reply_all = ?, approved = ?,
+                          summary = ?, problems = ?, reviews = ?, hit_limit = ?
+        WHERE id = ?
+        """,
+        (
+            cost, drafted.draft["body"], json.dumps(drafted.draft["open_questions"], ensure_ascii=False),
+            drafted.draft["reply_all"], review.approved, review.summary,
+            json.dumps([{"kind": p.kind, "detail": p.detail} for p in review.problems], ensure_ascii=False),
+            drafted.reviews, drafted.hit_limit, draft_id,
+        ),
+    )
+    conn.commit()
+
+
+def end_draft(conn, draft_id, status, problem, cost=None):
+    """Record a draft that ended without one to show: "stopped" (the Drafter stopped), "failed" (something went wrong)
+    or "interrupted" (the server stopped while it was writing). problem says why, in words for the page.
+    Without a cost, the one saved after the last call to Claude stays.
+    """
+    conn.execute(
+        "UPDATE drafts SET status = ?, problem = ?, cost = COALESCE(?, cost) WHERE id = ?", (status, problem, cost, draft_id)
+    )
+    conn.commit()
+
+
+def latest_draft(conn, thread_id):
+    """The newest draft for a conversation, or None."""
+    return conn.execute("SELECT * FROM drafts WHERE thread_id = ? ORDER BY id DESC LIMIT 1", (thread_id,)).fetchone()
+
+
 def forget_emails(conn, message_ids):
     """Forget some emails, so they get sorted again next time. Their full reads and crossed-out changes go with them."""
     question_marks = ", ".join("?" * len(message_ids))  # one per email, so the IDs still go in as values, never as SQL

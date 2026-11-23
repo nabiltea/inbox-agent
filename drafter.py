@@ -221,6 +221,88 @@ class Drafted:
     hit_limit: bool = False  # it stopped at COST_LIMIT, so the review's problems weren't fixed
 
 
+# The steps write_draft() reports while it works, one small record each. Whoever is watching
+# decides how to show them: the terminal prints terminal_lines(), and the web page writes a sentence.
+
+@dataclass
+class ReadConversation:
+    """It has read the conversation it's answering."""
+
+    subject: str
+    messages: int
+    person: str  # the email address of the person I'm answering
+
+
+@dataclass
+class GotContext:
+    """It has what it always gets: my earlier emails to the person, and my profile files."""
+
+    person: str
+    writers: int  # how many people wrote in the conversation: its lookups only cover emails with them
+    recent_emails: int
+    profile_files: int
+
+
+@dataclass
+class LookedUp:
+    """It looked something up with one of my MCP server's read-only tools."""
+
+    step: int
+    tool: str  # "search_emails" or "read_thread"
+    asked: dict  # what the Drafter asked for
+    used: dict  # what was really asked, with the limit to the conversation's writers added
+    failed: bool  # refused, or Gmail couldn't answer
+
+
+@dataclass
+class Submitted:
+    """It handed in a draft, which the Critic is now reviewing."""
+
+    step: int
+    round: int
+
+
+@dataclass
+class Reviewed:
+    """The Critic's verdict on the draft it was just handed."""
+
+    review: Review
+
+
+@dataclass
+class HitLimit:
+    """It stopped at COST_LIMIT."""
+
+    cost: float
+
+
+def terminal_lines(step):
+    """A step as the terminal prints it. match picks the case by what kind of record the step is."""
+    match step:
+        case ReadConversation():
+            return [f"Conversation: {step.subject!r} ({step.messages} messages), answering {step.person}"]
+        case GotContext():
+            return [f"Lookups limited to {step.writers} people who wrote in it. My earlier emails to {step.person}: "
+                    f"{step.recent_emails}. Profile files: {step.profile_files or 'none'}\n"]
+        case LookedUp():
+            refused = " -> refused" if step.failed else ""
+            return [f"Step {step.step}: Drafter calls {step.tool}({json.dumps(step.used, ensure_ascii=False)}){refused}"]
+        case Submitted():
+            return [f"Step {step.step}: Drafter submits a draft. The Critic reviews it (round {step.round})..."]
+        case Reviewed():
+            verdict = "APPROVED" if step.review.approved else "NEEDS CHANGES"
+            return [f"  {verdict}: {step.review.summary}"] + [f"  - [{p.kind}] {p.detail}" for p in step.review.problems]
+        case HitLimit():
+            return [f"Stopped at the ${COST_LIMIT:.2f} limit for one draft, after ${step.cost:.3f}."]
+    return []
+
+
+def print_step(step):
+    """How the terminal follows write_draft(): it prints each step as it happens."""
+    for line in terminal_lines(step):
+        print(line)
+
+
 def as_data(result):
     """An MCP tool's answer as Python data (a list arrives wrapped as {"result": [...]})."""
     content = result.structured_content
@@ -356,26 +438,30 @@ async def find_thread(gmail, query):
     return emails[0]["thread_id"]
 
 
-async def write_draft(gmail, claude, costs, thread_id, note=None, report=print):
+async def write_draft(gmail, claude, costs, thread_id, note=None, report=print_step):
     """Write a reply to one conversation with the Drafter and the Critic. Nothing changes in Gmail.
 
     gmail is an open connection to my MCP server, and claude one to Claude. costs is a
     CostTracker that the caller makes, so the caller still knows what was spent if this
-    stops partway. note is what I want the reply to say, if anything. report gets a line
-    of text at each step: the terminal prints it, and the page will show it.
+    stops partway. note is what I want the reply to say, if anything. report gets a record
+    of each step as it happens (the classes above): the terminal prints it, and the page
+    shows it as a sentence.
 
     Returns a Drafted with the last reviewed draft, approved or not. Raises DrafterStopped
     when there's no reviewed draft to hand back.
     """
-    thread = as_data(await gmail.call_tool("read_thread", {"thread_id": thread_id}))
+    result = await gmail.call_tool("read_thread", {"thread_id": thread_id})
+    if result.is_error:  # like an expired Gmail login: the MCP server's message says what to do
+        why = as_text(result).removeprefix("Error executing tool read_thread").lstrip(": ")
+        raise DrafterStopped(f"Couldn't read the conversation: {why}" if why else "Couldn't read the conversation.")
+    thread = as_data(result)
     conversation = thread_text(thread)
     person = find_person(thread)
     writers = find_writers(thread, person)
     recent_emails = await my_recent_emails_to(gmail, person, thread_id)
     profile = load_profile()
-    report(f"Conversation: {thread['subject']!r} ({len(thread['messages'])} messages), answering {person}")
-    report(f"Lookups limited to {len(writers)} people who wrote in it. My earlier emails to {person}: {len(recent_emails)}. "
-           f"Profile files: {profile.count('</') or 'none'}\n")
+    report(ReadConversation(thread["subject"], len(thread["messages"]), person))
+    report(GotContext(person, len(writers), len(recent_emails), profile.count("</")))
 
     # The Drafter's tools: the read-only ones from my MCP server, plus submit_draft.
     # Their descriptions get a line saying which people's emails they cover.
@@ -414,7 +500,7 @@ async def write_draft(gmail, claude, costs, thread_id, note=None, report=print):
                     f"Stopped at the ${COST_LIMIT:.2f} limit for one draft, after ${costs.total:.3f}, "
                     "before the Drafter had handed in a draft."
                 )
-            report(f"Stopped at the ${COST_LIMIT:.2f} limit for one draft, after ${costs.total:.3f}.")
+            report(HitLimit(costs.total))
             return Drafted(*latest, reviews, person, hit_limit=True)
 
         response = await claude.beta.messages.create(
@@ -448,11 +534,9 @@ async def write_draft(gmail, claude, costs, thread_id, note=None, report=print):
         for call in tool_calls:
             if call.name == "submit_draft":
                 reviews += 1
-                report(f"Step {step}: Drafter submits a draft. The Critic reviews it (round {reviews})...")
+                report(Submitted(step, reviews))
                 review = await critique(claude, costs, profile, conversation, recent_emails, note, research, call.input)
-                report(f"  {'APPROVED' if review.approved else 'NEEDS CHANGES'}: {review.summary}")
-                for problem in review.problems:
-                    report(f"  - [{problem.kind}] {problem.detail}")
+                report(Reviewed(review))
                 latest = (call.input, review)
                 if review.approved or reviews >= MAX_REVIEWS:
                     final = latest
@@ -462,7 +546,7 @@ async def write_draft(gmail, claude, costs, thread_id, note=None, report=print):
                     text, failed, used_input = await run_lookup(gmail, call.name, call.input, writers)
                 except MCPError as error:
                     text, failed, used_input = f"Error: {error}", True, call.input
-                report(f"Step {step}: Drafter calls {call.name}({json.dumps(used_input, ensure_ascii=False)}){' -> refused' if failed else ''}")
+                report(LookedUp(step, call.name, call.input, used_input, failed))
                 research.append(f"{call.name}({json.dumps(used_input, ensure_ascii=False)}):\n{text}")
                 results.append({"type": "tool_result", "tool_use_id": call.id, "content": text, "is_error": failed})
             else:
