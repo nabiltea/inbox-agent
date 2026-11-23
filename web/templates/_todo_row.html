@@ -90,12 +90,16 @@
       </details>
     {% endif %}
   </div>
-  {# The last line, at the row's left edge: the buttons that take this to-do off the list, then the
-     Gmail link. Both buttons send the row's emails, which are in the form, so one click archives
+  {# The last line, at the row's left edge: Draft reply for a reply by email, the buttons that take this
+     to-do off the list, then the Gmail link. Both buttons send the row's emails, which are in the form, so one click archives
      every conversation the row stands for. hx-post sends the click, and hx-target says the answer
      replaces this whole row. hx-disabled-elt disables the fieldset around the buttons straight
      away, which greys out both, so a double click can't send two requests. #}
   <div class="flex w-full flex-wrap items-center gap-x-4 gap-y-2">
+    {# A reply by email gets its draft page first. A link, not a form: opening the page changes nothing. #}
+    {% if todo.reply_by_email %}
+      <a href="{{ url_for('draft_page', thread_id=todo.thread_id).path }}" class="{{ button_style }}">Draft reply</a>
+    {% endif %}
     <form hx-target="closest li" hx-swap="outerHTML">
       {% for message_id in todo.message_ids %}
         <input type="hidden" name="message_id" value="{{ message_id }}">

@@ -71,6 +71,14 @@ class Todo:
     # Not needed take out of the inbox. The page's business, so the MCP server leaves it out.
     message_ids: list[str] = field(default_factory=list)
 
+    @property
+    def reply_by_email(self):
+        """Whether the Drafter can write the reply: the full read says to reply by email or, without one, triage said Reply.
+
+        A reply on another site, like a message on LinkedIn, doesn't count: an email can't answer it.
+        """
+        return self.kind == "reply by email" if self.kind else self.needs_reply
+
 
 def list_todos(flagged, inbox_ids, today=None):
     """My to-do list: one Todo per task, most pressing first (see _same_task and _position).

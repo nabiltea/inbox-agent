@@ -412,14 +412,18 @@ def gmail_link(thread_id, address):
     return f"https://mail.google.com/mail/?{urlencode({'authuser': address})}#inbox/{thread_id}"
 
 
-def get_thread(service, thread_id, max_chars_per_message=4000):
+def get_thread(service, thread_id, max_chars_per_message=4000, attempts=5):
     """Return a whole conversation: its subject, and each message's sender, recipients, date and text.
 
     Each message says whether I sent it ("from_me"). Long messages are cut to
     max_chars_per_message characters, mostly to drop the quoted copies of earlier
     messages that replies tend to repeat at the bottom.
+
+    attempts is how many times to ask when Gmail refuses for a moment (see _execute),
+    waiting a minute between tries. Work in the background, like the Drafter's, can wait.
+    A page someone is looking at asks once, and says Gmail isn't answering.
     """
-    thread = _execute(service.users().threads().get(userId="me", id=thread_id, format="full"))
+    thread = _execute(service.users().threads().get(userId="me", id=thread_id, format="full"), attempts)
     me = get_my_address(service).lower()
     messages = []
     for message in thread["messages"]:

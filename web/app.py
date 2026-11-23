@@ -59,7 +59,7 @@ from gmail_client import (
 from todos import list_todos
 from triage import load_labels
 from undo import plan_undo, what_undo_would_do
-from web import labelling, sorting
+from web import drafting, labelling, sorting
 from web.csrf import csrf_context, protect_against_other_websites
 
 log = logging.getLogger("uvicorn.error")
@@ -365,6 +365,37 @@ def undo_todo(
         request=request,
         name="_todo_undone.html",
         context={"todo": todo, "message": message, "gmail_address": saved_account(), **todo_numbers(todos)},
+    )
+
+
+@app.get("/action-needed/{thread_id}/draft")
+def draft_page(request: Request, thread_id: str):
+    """The draft page for one conversation: the conversation, read from Gmail, and a box for my hints.
+
+    Opening it only reads, so it's a GET. It opens for any conversation the agent has sorted,
+    not only for today's to-dos, so it still works after I've cleared the to-do.
+    """
+    with closing(database.connect()) as conn:
+        subject = database.conversation_subject(conn, thread_id)
+    if subject is None:  # an old or mistyped address: there's nothing to ask Gmail about
+        return templates.TemplateResponse(
+            request=request, name="draft.html", context={"active": "action_needed", "unknown": True}, status_code=404
+        )
+    thread, problem = drafting.read_conversation(thread_id)
+    return templates.TemplateResponse(
+        request=request,
+        name="draft.html",
+        context={
+            "active": "action_needed",
+            "thread_id": thread_id,
+            # Gmail's subject when it could be asked, and the log's otherwise
+            "subject": thread["subject"] if thread else subject,
+            "messages": drafting.shown_messages(thread) if thread else [],
+            "gone": problem == "gone",
+            "gmail_problem": None if problem == "gone" else problem,  # for the notice in base.html
+            "max_hints": drafting.MAX_HINTS,
+            "gmail_address": saved_account(),  # for the "Open in Gmail" link, as on Action needed
+        },
     )
 
 

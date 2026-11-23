@@ -158,6 +158,45 @@ def connect():
         conn.execute("ALTER TABLE label_changes ADD COLUMN undone_at TEXT")
     if "entered_inbox" not in columns:
         conn.execute("ALTER TABLE label_changes ADD COLUMN entered_inbox INTEGER DEFAULT 0")
+
+    # Every reply the Drafter writes from the web page: one row per press of "Write draft", so
+    # writing again starts a new row and keeps the old one. A row has three parts:
+    # - what I asked: the conversation, its subject, my hints and when I pressed the button;
+    # - what happened: status ("writing", "finished", "stopped" or "failed"), why it stopped
+    #   (problem), the cost, the Drafter's draft with what I still have to fill in
+    #   (open_questions, a JSON list) and whether it's Reply all, the Critic's verdict
+    #   (approved, summary, and problems as a JSON list), how many reviews it took, and
+    #   whether the cost limit stopped it (hit_limit);
+    # - what I saved to Gmail: when, the text I saved (saved_body, which may be my edit of
+    #   the draft), and Gmail's ID for the draft with who it goes to, so the page can check
+    #   later whether it's still waiting in Gmail.
+    # Unlike full_reads, it isn't linked to an email's row in decisions: undoing a sorting run
+    # deletes those rows, and a draft is my own action that cost money, so it must stay.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS drafts (
+            id INTEGER PRIMARY KEY,
+            thread_id TEXT,
+            subject TEXT,
+            hints TEXT,
+            started_at TEXT,
+            status TEXT,
+            problem TEXT,
+            cost REAL,
+            body TEXT,
+            open_questions TEXT,
+            reply_all INTEGER,
+            approved INTEGER,
+            summary TEXT,
+            problems TEXT,
+            reviews INTEGER,
+            hit_limit INTEGER,
+            saved_at TEXT,
+            saved_body TEXT,
+            gmail_draft_id TEXT,
+            saved_to TEXT,
+            saved_cc TEXT
+        )
+    """)
     # SQLite only enforces links between tables (like the one above) when this is
     # switched on, and only for this connection, so it's switched on every time.
     conn.execute("PRAGMA foreign_keys = ON")
@@ -170,6 +209,14 @@ def is_processed(conn, message_id):
     """True if the agent has already sorted this email."""
     row = conn.execute("SELECT 1 FROM decisions WHERE message_id = ?", (message_id,)).fetchone()
     return row is not None
+
+
+def conversation_subject(conn, thread_id):
+    """The subject of the newest email the agent has sorted in this conversation, or None if it has sorted none."""
+    row = conn.execute(
+        "SELECT subject FROM decisions WHERE thread_id = ? ORDER BY received_at DESC LIMIT 1", (thread_id,)
+    ).fetchone()
+    return row["subject"] if row else None
 
 
 def save_decision(conn, run_id, email, result, label_added, archived, model, cost):

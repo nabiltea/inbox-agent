@@ -1249,6 +1249,33 @@ The Drafter and the Critic have worked from the terminal since Step 6. This piec
 - **Found:**
   - **When drafting stopped early, the terminal showed a traceback, not just the message.** My MCP client runs its background tasks as a group, and anything that leaves its `async with` block, a program exit included, comes out wrapped in a "group" of exceptions, which Python prints in full. It had been like this since Step 6, because the code exited from inside that block. Now the terminal leaves the block first and exits afterwards. The page has to do the same: catch `DrafterStopped` inside the block, before it gets wrapped.
 
+**Part 2: the Draft reply button and the draft page**
+- **Decided:**
+  - **"Draft reply" on to-dos that need a reply by email,** next to Done and Not needed. It's a link, not a button that sends a form, because opening the page changes nothing. One rule in `todos.py` decides which rows get it: the full read says "reply by email", or, without a full read, triage said Reply. A reply on another site, like a forum message, gets none, because an email can't answer it.
+  - **The draft page opens for any conversation the agent has sorted,** not only today's to-dos, so it still works after I've pressed Done. A conversation the agent never sorted gets "not found", without asking Gmail.
+  - **The conversation reads oldest first, like Gmail.** I looked at a mock-up of both orders first. Newest first would put the message I'm answering at the top, but oldest first reads the way the conversation happened, and matches Gmail, where I check and send the draft. Older messages are folded to one line. The message the reply answers is open, with a blue line and "Replying to this": in a group conversation, that's the newest message from someone else, even when I wrote after it.
+  - **Each message's text is exactly what the Drafter gets,** quoted copies and the cut at 4,000 characters included. A web address stays plain text, never a link, as on Action needed.
+  - **The drafts table stands on its own:** one row per press of Write draft, with what I asked, what happened and what I saved. Unlike the full reads, it isn't tied to an email's row in the log. Undoing a sorting run deletes those rows, and a draft is my own action that cost money.
+  - **The page doesn't wait out Gmail's hiccups.** Reading a conversation used to wait out Gmail's per-minute limit, trying again a minute later, up to four minutes in all. That suits the Drafter working in the background, not a page I'm looking at. So the page asks Gmail once and, if Gmail refuses for a moment, says so straight away. The Drafter and Claude Desktop still wait and try again.
+  - **Smaller choices:** the hints box takes up to 2,000 characters; Write draft shows greyed out until part 3; a folded message's preview hides while it's open.
+- **Built:** the `drafts` table and `conversation_subject()` in `database.py`; `reply_by_email` on each to-do in `todos.py`; `web/drafting.py`, which reads the conversation and prepares its messages for the page; the address `/action-needed/<conversation>/draft` in `web/app.py`; `draft.html`, and the link in `_todo_row.html`. In `gmail_client.py`, `get_thread()` takes how many times to try, still 5 unless asked otherwise.
+- **Learned:**
+  - **A mock-up before code.** Seeing both orders side by side settled a choice that was hard to judge from a description.
+  - **Folds without JavaScript.** The browser opens and closes a `<details>` fold by itself, and Tailwind's `group-open:` lets a style depend on whether the fold around it is open.
+- **Result:**
+  - **62 checks on a copy of my log with made-up emails added,** and a stand-in for Gmail's API under the real code that reads a conversation. They cover:
+    - which rows get the link;
+    - every kind of conversation: a group one, one where every message is mine, a single message and a long one;
+    - one that's gone from Gmail, one the agent never sorted, and odd text in the address;
+    - each Gmail problem, asked about once with no waiting, while everything else still tries 5 times;
+    - email text trying to be code, a hidden paragraph and a forged click.
+  - **Action needed with the committed templates and the new ones:** the same page, apart from the new links.
+  - **Breaking the code on purpose:** 12 different breaks each made tests fail.
+  - **In a real browser, with made-up emails:** the folds, the group case and phone width work, with no errors in the console.
+- **Found:**
+  - **A test wrote into my real log.** To break `database.py` on purpose, a test ran the whole file again in memory. That also ran its first lines again, which set the log's file name back to the real one, so the test's 11 made-up emails and an unfinished drafts table went into my log instead of the copy. The test noticed by itself: its copy had no drafts table. My own rows were untouched. After a backup, I removed exactly what the test had added, then compared every row with the backup made before this part: identical. Now the tests copy from that backup, point everything back at the copy after running a file again, check they're on the copy before writing anything, and end by checking that the real log hasn't changed.
+  - **A hiccup at Gmail could make the page load for minutes,** because reading a conversation waited out Gmail's per-minute limit. A test with a stand-in for a Gmail hiccup found it, and the page now asks once (see Decided).
+
 ## What's left
 
 - [x] **Step 1:** First call to Claude
@@ -1321,7 +1348,7 @@ The Drafter and the Critic have worked from the terminal since Step 6. This piec
 - [x] Buttons to clear a to-do on the page: Done, and Not needed, which also records that Claude was wrong. Each archives every conversation in its row, with an Undo. They're protected like every other button, by the protection against other websites that piece 3 added
 - [ ] **Step 7, piece 6:** the draft flow: "Draft reply" with a hints box, the Critic's verdict, and saving to Gmail drafts, also when the Critic isn't satisfied, in five parts:
   - [x] part 1: the Drafter's work as a function the page can call, with a $0.50 limit per draft and up-to-date prices
-  - [ ] part 2: the drafts table in the log, the "Draft reply" button and the draft page
+  - [x] part 2: the drafts table in the log, the "Draft reply" button and the draft page
   - [ ] part 3: the Drafter on a second thread, with each step shown live
   - [ ] part 4: the draft with the Critic's verdict, editing, and saving to Gmail drafts
   - [ ] part 5: the home page's count of drafts waiting in Gmail, and a "Draft saved" tag on Action needed
