@@ -32,6 +32,7 @@ from gmail_client import (
     GoogleUnreachableError,
     SignInNeededError,
     create_reply_draft,
+    draft_ids,
     explain_failures,
     get_gmail_service,
     get_thread,
@@ -99,6 +100,24 @@ def read_conversation(thread_id):
     Returns (the conversation, None) or (None, problem), as _ask_gmail() says.
     """
     return _ask_gmail(lambda service: get_thread(service, thread_id, attempts=1))
+
+
+def waiting_drafts():
+    """The drafts I saved from the page that are still in my Gmail drafts, waiting to be sent.
+
+    Returns (their rows from the log, None), or (None, problem) as _ask_gmail() says. One free
+    request lists the IDs of my Gmail drafts, and a saved draft counts while its ID is among
+    them: once I send it or delete it in Gmail, it drops out by itself. With nothing saved from
+    the page, Gmail isn't asked at all.
+    """
+    with closing(database.connect()) as conn:
+        saved = database.saved_drafts(conn)
+    if not saved:
+        return [], None
+    in_gmail, problem = _ask_gmail(draft_ids)
+    if problem:
+        return None, problem
+    return [row for row in saved if row["gmail_draft_id"] in in_gmail], None
 
 
 def check_recipients(thread_id, reply_all):

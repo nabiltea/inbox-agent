@@ -27,6 +27,8 @@
       {% if todo.needs_action %}{{ tag("Action", "bg-amber-100 text-amber-800") }}{% endif %}
       {% if todo.needs_reply %}{{ tag("Reply", "bg-blue-100 text-blue-800") }}{% endif %}
     {% endif %}
+    {# A reply I saved from its draft page that's still in my Gmail drafts, waiting to be sent #}
+    {% if drafted and todo.thread_id in drafted %}{{ tag("Draft saved", "bg-green-100 text-green-800") }}{% endif %}
   </div>
   <div class="min-w-0 flex-1">
     <p class="font-medium">{{ todo.what_to_do }}</p>

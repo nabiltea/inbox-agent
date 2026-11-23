@@ -474,6 +474,23 @@ def create_reply_draft(service, thread_id, body, reply_all=False):
     return {"draft_id": draft["id"], "to": reply["To"], "cc": reply["Cc"] or "", "subject": reply["Subject"]}
 
 
+def draft_ids(service):
+    """The IDs of all my drafts in Gmail, as a set. A draft I send or delete drops out of it by itself.
+
+    Only reads. Gmail gives at most 500 per request, so this asks for the next "page" until it
+    has them all, like list_message_ids(). fields asks for the IDs alone, not the drafts themselves.
+    """
+    ids, page_token = set(), None
+    while True:
+        response = service.users().drafts().list(
+            userId="me", maxResults=500, pageToken=page_token, fields="drafts/id,nextPageToken"
+        ).execute()
+        ids |= {draft["id"] for draft in response.get("drafts", [])}
+        page_token = response.get("nextPageToken")
+        if page_token is None:
+            return ids
+
+
 def reply_recipients(service, thread_id, reply_all=False):
     """Who a reply to this conversation would go to, without saving anything: {"to": ..., "cc": ...}.
 

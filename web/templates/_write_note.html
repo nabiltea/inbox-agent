@@ -6,7 +6,7 @@
     <a href="{{ url_for('draft_page', thread_id=run.thread_id).path }}" class="text-blue-600 hover:underline">See it</a>
   {% else %}
     About 5 to 20 cents.
-    {% if draft and draft.saved_at %}Writing again makes a new draft. The saved one stays in Gmail until you delete it there.
+    {% if draft and draft.saved_at %}Writing again makes a new draft.{% if in_gmail is not sameas false %} The saved one stays in Gmail until you delete it there.{% endif %}
     {% elif draft %}Writing again replaces this draft on the page (the log keeps it), and changes you haven't saved are lost.{% endif %}
   {% endif %}
 </span>

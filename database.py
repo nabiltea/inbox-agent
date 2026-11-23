@@ -689,6 +689,11 @@ def latest_draft(conn, thread_id):
     return conn.execute("SELECT * FROM drafts WHERE thread_id = ? ORDER BY id DESC LIMIT 1", (thread_id,)).fetchone()
 
 
+def saved_drafts(conn):
+    """Every draft I've saved to Gmail from the page, with Gmail's ID for it, oldest first."""
+    return conn.execute("SELECT * FROM drafts WHERE saved_at IS NOT NULL ORDER BY id").fetchall()
+
+
 def get_draft(conn, draft_id):
     """One draft by its ID, or None."""
     return conn.execute("SELECT * FROM drafts WHERE id = ?", (draft_id,)).fetchone()

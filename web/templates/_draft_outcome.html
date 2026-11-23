@@ -54,6 +54,9 @@
             {% if edited %}With your changes: the Critic reviewed the earlier version.{% else %}As the Critic reviewed it.{% endif %}
             {% if placeholders %}It still has {{ placeholders }} [{{ "placeholder" if placeholders == 1 else "placeholders" }}] to fill in before sending.{% endif %}
           </p>
+          {% if in_gmail is sameas false %}
+            <p class="mt-1 font-medium">It's no longer in your Gmail drafts: sent or deleted there.</p>
+          {% endif %}
           {% if gmail_address %}<p class="mt-1">{{ open_in_gmail(thread_id, gmail_address) }}</p>{% endif %}
         </div>
         <p class="mt-3 whitespace-pre-wrap wrap-break-word rounded-md border border-gray-200 bg-gray-50 px-4 py-3 text-sm">{{ text }}</p>

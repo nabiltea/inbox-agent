@@ -1344,6 +1344,25 @@ The Drafter and the Critic have worked from the terminal since Step 6. This piec
   - **Watching it in the browser found one more stale part of the page:** after Save, the note beside Write still said unsaved changes would be lost. Save's answer now brings the updated note too.
   - **A refused Save on a draft that had stopped didn't say why,** because only a finished draft's box had room for the message. Only an out-of-date page can do that, but it now says why too.
 
+**Part 5: replies waiting to be sent**
+- **Decided:**
+  - **A draft counts as waiting while it's still in my Gmail drafts.** The log keeps Gmail's ID for each draft I save from the page, and one free request lists the IDs of all my Gmail drafts. A draft I send or delete in Gmail drops out of that list by itself, so nothing has to tell the app.
+  - **The home page's card** that had said "Coming in piece 6" since piece 1f now counts the replies waiting to be sent, and links to Action needed. It shows "?" when Gmail can't be asked, like the new-emails card.
+  - **A "Draft saved" tag on Action needed,** only while the draft is still in Gmail. A tag from the log alone would still say "Draft saved" after I'd sent the reply.
+  - **The draft page says when the saved draft has left Gmail:** "sent or deleted there", because the list can't tell the two apart. When Gmail can't be asked, it doesn't guess.
+  - **With nothing saved from the page, Gmail isn't asked at all.**
+- **Built:** `draft_ids()` in `gmail_client.py`, which only reads, page by page; `saved_drafts()` in `database.py`; `waiting_drafts()` in `web/drafting.py`; the card, the tag and the draft page's line.
+- **Learned:**
+  - **Let the source of truth decide.** Rather than the app remembering when I send a draft, which it can't see, it asks Gmail which drafts still exist. Facts come from where they live.
+  - **Jinja2's comments never reach the page.** A test that looked for a template comment in the HTML found nothing, which was the test's mistake, not the page's.
+- **Result,** with no money spent:
+  - **27 checks on a copy of my log, with a stand-in for Gmail's drafts list:** drafts still there, sent or deleted, from another app, a list on two pages, an empty drafts folder, three kinds of Gmail failure, nothing saved (and Gmail not asked), and the real log untouched.
+  - **Action needed and the home page, committed templates against new ones:** with nothing waiting, Action needed is the same page, and the home page differs only in the card.
+  - **Parts 2 to 4 pass again** (62, 77 and 86 checks).
+  - **Breaking the code on purpose:** 11 different breaks each made tests fail.
+  - **In a real browser with made-up emails:** write, save, then the card and the tag, at desktop and phone width, with no console errors.
+- **Not tested yet:** whether a Gmail draft keeps its ID when I edit it in Gmail. Google doesn't say plainly. The real draft in the next step will show it.
+
 ## What's left
 
 - [x] **Step 1:** First call to Claude
@@ -1414,12 +1433,12 @@ The Drafter and the Critic have worked from the terminal since Step 6. This piec
 - [ ] Find out why Gmail refused part of a request for 45 emails at once, at email 37, and whether the code needs to wait a full minute (the first real Sort fetched 229 without a pause)
 - [x] The reader reads the version of an email I see: the HTML version when there is one, without its hidden parts, rather than a plain-text version that can say other things
 - [x] Buttons to clear a to-do on the page: Done, and Not needed, which also records that Claude was wrong. Each archives every conversation in its row, with an Undo. They're protected like every other button, by the protection against other websites that piece 3 added
-- [ ] **Step 7, piece 6:** the draft flow: "Draft reply" with a hints box, the Critic's verdict, and saving to Gmail drafts, also when the Critic isn't satisfied, in five parts:
+- [x] **Step 7, piece 6:** the draft flow: "Draft reply" with a hints box, the Critic's verdict, and saving to Gmail drafts, also when the Critic isn't satisfied, in five parts:
   - [x] part 1: the Drafter's work as a function the page can call, with a $0.50 limit per draft and up-to-date prices
   - [x] part 2: the drafts table in the log, the "Draft reply" button and the draft page
   - [x] part 3: the Drafter on a second thread, with each step shown live
   - [x] part 4: the draft with the Critic's verdict, editing, and saving to Gmail drafts
-  - [ ] part 5: the home page's count of drafts waiting in Gmail, and a "Draft saved" tag on Action needed
+  - [x] part 5: the home page's count of drafts waiting in Gmail, and a "Draft saved" tag on Action needed
 - [ ] A double-click shortcut that starts the web page, so opening it doesn't need VS Code
 - [ ] Decide whether to move the Google app from "Testing" to "In production", which would end the weekly sign-in (first check Google's rules for unverified apps that use Gmail)
 - [ ] Reorganize the project into folders, as its own step after Step 7, with one setting for where the data files live

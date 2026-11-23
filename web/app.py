@@ -247,6 +247,7 @@ def home(request: Request):
         read_costs = database.full_read_costs(conn, since=month_start)
         draft_costs = database.drafting_costs(conn, since=month_start)
         unsorted = database.unsorted_count(conn)
+    waiting, _ = drafting.waiting_drafts()  # None when Gmail couldn't be asked
     return templates.TemplateResponse(
         request=request,
         name="home.html",
@@ -259,6 +260,7 @@ def home(request: Request):
             "replies": sum(todo.needs_reply for todo in todos),
             "new": new,
             "unsorted": unsorted,
+            "waiting": None if waiting is None else len(waiting),  # replies waiting to be sent
             "last_run": last_run,
             "last_run_date": datetime.fromisoformat(last_run["started"]) if last_run else None,
             "costs": costs,
@@ -290,6 +292,7 @@ def action_needed(request: Request):
         context={  # the values the template can use
             "active": "action_needed",
             "todos": todos,
+            "drafted": drafted_threads(),  # for the "Draft saved" tag
             **todo_numbers(todos),  # count, urgent and overdue, for beside the heading
             # For the "Open in Gmail" links: read from the saved login, so no request to Gmail.
             # The links work even when the app can't reach Gmail: Chrome has its own sign-in.
@@ -298,6 +301,15 @@ def action_needed(request: Request):
             "message": _waiting.pop("message", None),  # shown once, after signing in
         },
     )
+
+
+def drafted_threads():
+    """The conversations with a draft I saved from the page that's still in my Gmail drafts, for the "Draft saved" tag.
+
+    Empty when Gmail can't be asked: the tag is only a help, and the page says Gmail couldn't be checked anyway.
+    """
+    waiting, _ = drafting.waiting_drafts()
+    return {row["thread_id"] for row in waiting or []}
 
 
 def todo_numbers(todos):
@@ -367,7 +379,10 @@ def undo_todo(
     return templates.TemplateResponse(
         request=request,
         name="_todo_undone.html",
-        context={"todo": todo, "message": message, "gmail_address": saved_account(), **todo_numbers(todos)},
+        context={
+            "todo": todo, "message": message, "gmail_address": saved_account(),
+            "drafted": drafted_threads() if todo else set(), **todo_numbers(todos),
+        },
     )
 
 
@@ -388,6 +403,10 @@ def draft_page(request: Request, thread_id: str):
     messages = drafting.shown_messages(thread) if thread else []
     draft, _ = drafting.latest(thread_id)  # the newest draft for this conversation, from the log
     run = drafting.current()
+    in_gmail = None  # for a saved draft: whether it's still in my Gmail drafts, or None if Gmail couldn't be asked
+    if draft is not None and draft["saved_at"] and thread is not None:
+        waiting, _ = drafting.waiting_drafts()
+        in_gmail = None if waiting is None else any(row["id"] == draft["id"] for row in waiting)
     return templates.TemplateResponse(
         request=request,
         name="draft.html",
@@ -404,18 +423,19 @@ def draft_page(request: Request, thread_id: str):
             "run": run if run and run.running else None,  # a draft being written, for this conversation or another
             "problem": None,
             # The box with the newest draft. Gmail is only asked who it goes to when the conversation could be read.
-            **draft_outcome(thread_id, draft, messages, ask_gmail=thread is not None),
+            **draft_outcome(thread_id, draft, messages, ask_gmail=thread is not None, in_gmail=in_gmail),
         },
     )
 
 
-def draft_outcome(thread_id, draft, messages=(), text=None, save_problem=None, ask_gmail=True):
+def draft_outcome(thread_id, draft, messages=(), text=None, save_problem=None, ask_gmail=True, in_gmail=None):
     """What the box with the newest draft shows (_draft_outcome.html), on the draft page and after Save.
 
     For a finished draft that isn't saved yet, it asks Gmail who a draft saved now would go to,
     and whether a message arrived after it was written. text is what to put in the edit box,
     like my edits after a Save that didn't work. Otherwise the box gets the Drafter's text,
-    without invisible characters.
+    without invisible characters. in_gmail says whether a saved draft is still in my Gmail
+    drafts: False once I've sent or deleted it there, and None when that's unknown.
     """
     unsaved = draft is not None and draft["status"] == "finished" and not draft["saved_at"]
     who, who_problem = drafting.check_recipients(thread_id, bool(draft["reply_all"])) if unsaved and ask_gmail else (None, None)
@@ -438,6 +458,7 @@ def draft_outcome(thread_id, draft, messages=(), text=None, save_problem=None, a
         "who_problem": who_problem,
         "newer": unsaved and drafting.arrived_since(messages, draft),
         "save_problem": save_problem,
+        "in_gmail": in_gmail,
     }
 
 
@@ -476,7 +497,9 @@ def save_draft(request: Request, thread_id: str, draft_id: int, text: Annotated[
             "gmail_address": saved_account(),
             "run": None,
             "answer": True,  # with the note beside the Write button
-            **draft_outcome(thread_id, draft, text=None if draft["saved_at"] else text, save_problem=problem),
+            # A draft this click saved is in Gmail: no need to ask
+            **draft_outcome(thread_id, draft, text=None if draft["saved_at"] else text, save_problem=problem,
+                            in_gmail=True if draft["saved_at"] and problem is None else None),
         },
     )
 

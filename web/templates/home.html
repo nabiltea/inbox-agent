@@ -51,10 +51,17 @@
       </a>
     </div>
 
+    {# Drafts saved from a draft page that are still in my Gmail drafts (see waiting_drafts() in drafting.py).
+       "?" when Gmail couldn't be asked. #}
     <div class="flex flex-col rounded-lg bg-white p-5 shadow-sm">
-      <p class="text-3xl font-semibold text-gray-400">–</p>
-      <p class="mt-1 font-medium">replies waiting to be sent</p>
-      <p class="mt-1 text-sm text-gray-500">Coming in piece 6, with the draft flow</p>
+      <p class="text-3xl font-semibold">{{ "?" if waiting is none else waiting }}</p>
+      <p class="mt-1 font-medium">{{ "reply" if waiting == 1 else "replies" }} waiting to be sent</p>
+      <p class="mt-1 text-sm text-gray-500">
+        {% if waiting is none %}Gmail couldn't be asked.{% else %}Drafts you saved here that are still in your Gmail drafts{% endif %}
+      </p>
+      <a href="{{ url_for('action_needed').path }}" class="mt-auto pt-3 text-sm text-blue-600 hover:underline">
+        Action needed<span aria-hidden="true"> →</span>
+      </a>
     </div>
 
     <div class="flex flex-col rounded-lg bg-white p-5 shadow-sm">
