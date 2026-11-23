@@ -1363,6 +1363,20 @@ The Drafter and the Critic have worked from the terminal since Step 6. This piec
   - **In a real browser with made-up emails:** write, save, then the card and the tag, at desktop and phone width, with no console errors.
 - **Not tested yet:** whether a Gmail draft keeps its ID when I edit it in Gmail. Google doesn't say plainly. The real draft in the next step will show it.
 
+### The first real draft from the page
+
+With piece 6 built, I drafted a real reply from the page, start to finish, on one of my own to-dos that needed an answer by email. I pressed every button myself, after a fresh backup of the log.
+
+- **Result:**
+  - **Writing:** with a short hint, the steps came in live, and the Critic approved the draft on its first review. It cost **$0.057**, at the low end of the "about 5 to 20 cents" the button promises.
+  - **Editing and saving:** "To" named the right person before I saved. I changed the wording a little and pressed Save, 1.7 minutes after pressing Write.
+  - **In Gmail:** the draft sat inside the conversation, to the right person, with my edited text and its line breaks. Nothing was sent.
+  - **Back in the app:** the home page said "1 reply waiting to be sent", and the to-do had its "Draft saved" tag.
+  - **Editing the draft in Gmail kept it counted,** which answers part 5's open question: a Gmail draft keeps its ID when I edit it.
+  - **Once I'd dealt with it in Gmail,** the draft page said it was no longer in my drafts.
+  - **The log:** one row in the drafts table, saved, with the Drafter's text and mine side by side. Every other row was identical to the backup.
+- **Learned:** **a feature is finished when it's been used once, for real.** All the tests ran on made-up emails and stand-ins. This one run checked the parts no stand-in can: Google's real answers, Claude's real draft, and how the page feels to use.
+
 ## What's left
 
 - [x] **Step 1:** First call to Claude
@@ -1388,7 +1402,7 @@ The Drafter and the Critic have worked from the terminal since Step 6. This piec
 - [x] Step 6b: fill in `profile/about_me.md`
 - [x] Step 6b: resolve the sign-off conflict between `profile/about_me.md` and `profile/writing_style.md` (I removed the sign-off line from the about-me file, so the style file's sign-off section applies)
 - [x] Step 6b: give the Drafter and the Critic both profile files, limit lookups to the same person, Reply by default and Reply all only when asked
-- [ ] Use the Drafter on a real email that needs a reply, with `--save`, and check the draft in Gmail
+- [x] Use the Drafter on a real email that needs a reply, and check the draft in Gmail (done from the web page, after piece 6)
 - [x] **Step 7 plan:** technology, pages, the two-stage action read, the model cascade, urgency and build order (see Step 7 above)
 - [x] **Step 7, piece 1a:** the first page: a FastAPI app with one template, only reachable from my computer
 - [x] **Step 7, piece 1b:** Tailwind's standalone program, styling the page
