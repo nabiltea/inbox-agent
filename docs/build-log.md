@@ -211,7 +211,7 @@ How I built Inbox Agent, step by step: what I decided and why, what I built and 
   - **Group conversations**, on a real 14-message conversation with two other writers: a broad search returned 15 emails, all involving one of them. A conversation with only the *other* writer was allowed, which the first version would have refused. An unrelated conversation was still refused.
   - **The full Drafter**, on the same real conversation as before: it found my 3 earlier emails to the person and both profile files. It wrote a reply in my style, only to that person, with a placeholder for my opinion. Approved on the first try, for $0.10.
 
-### Step 7: The web page (in progress)
+### Step 7: The web page
 
 **Technology**
 - **FastAPI** (a Python web framework, run by the uvicorn server), **HTML templates** (Jinja2), **HTMX** and **Tailwind CSS**.
@@ -355,7 +355,7 @@ How I built Inbox Agent, step by step: what I decided and why, what I built and 
   - Nothing changed in Gmail or the log, and it cost nothing: there are no Claude or Gmail calls.
 - **Found:** 39 of the 62 to-dos are over 30 days old. The inbox check in 1e will show how many of them I've already dealt with and archived myself.
 
-**Piece 1e: only the to-dos still in my inbox (in progress)**
+**Piece 1e: only the to-dos still in my inbox**
 - **Decided:**
   - **A to-do is a flagged email that's still in my inbox.** When someone replies to a conversation I've archived, Gmail puts the conversation back in my inbox, but only the new email gets the inbox label. So the old to-do stays done, and the reply becomes a to-do only if triage flags it on the next run.
   - **One question to Gmail per page load:** "which emails are in my inbox?" (5 quota units per 500 emails), checked against the flagged emails in the log. Asking about each flagged email separately, as the MCP server does now, would cost 1,240 units for 62 emails, a fifth of the 6,000 units Gmail allows per minute.
@@ -1212,7 +1212,7 @@ After the first real Sort, my list had 81 emails in it, and the only way to clea
   - **In a real browser, with made-up emails:** Done on a row of 3, Undo and Not needed all work, and the count follows without a reload. Both buttons grey out at once, the console shows no errors, and it fits at phone width.
   - **The real thing, after a backup:** Done on a row of 8 real emails took all 8 out of my inbox in one click, and Undo put all 8 back. Not needed cleared a to-do that never needed me. Every email's row in the log stayed as it was.
 
-### Step 7, piece 6: drafting from the page (in progress)
+### Step 7, piece 6: drafting from the page
 
 The Drafter and the Critic have worked from the terminal since Step 6. This piece brings them to the Action needed page, in five parts.
 
@@ -1377,6 +1377,41 @@ With piece 6 built, I drafted a real reply from the page, start to finish, on on
   - **The log:** one row in the drafts table, saved, with the Drafter's text and mine side by side. Every other row was identical to the backup.
 - **Learned:** **a feature is finished when it's been used once, for real.** All the tests ran on made-up emails and stand-ins. This one run checked the parts no stand-in can: Google's real answers, Claude's real draft, and how the page feels to use.
 
+### The demo GIF and the final README
+
+The app only runs on my own computer, with my Gmail, so nobody else can see it work. Four screenshots showed the pages, but not what the agent does. So the README now opens with one GIF that goes through every page: sorting new emails, the to-do list, drafting a reply, approving a label and the History page.
+
+- **Decided:**
+  - **One GIF instead of the four screenshots,** so the README isn't cluttered. The screenshots are deleted.
+  - **The real app, with made-up emails and real answers from Claude.** Mock-ups wouldn't show the real pages, and recording my own inbox would show my emails. Pretend answers from Claude would make the demo a fake. The made-up inbox belongs to "Alex Example", the name in `profile.example/`, and every company and address is made up.
+  - **Claude's answers are recorded once and played back.** The first take asks the real Claude and saves every answer, with how long it took. Retakes play them back at the same speed, so they're free and still real. A take can only pay for an answer when told to, so a retake can never cost money by surprise.
+  - **Playwright drives the Chrome already on my computer,** with no window, and Pillow adds the captions and makes the GIF. Both are only for the demo, so they're in a new `requirements-dev.txt`, not in `requirements.txt`.
+  - **A caption on every frame, and an orange ring around the button about to be pressed,** because a screenshot without a window has no mouse pointer.
+  - **The GIF goes in the repo, under 8 MB. The script that makes it stays on my computer,** like the old screenshot script.
+- **Built:**
+  - `.claude/make_demo.py` (not in Git), with two commands. `take` clicks through the app and saves every frame, plus a contact sheet of them all for choosing which to keep. `gif` adds the captions and rings and makes the GIF, leaving out any frames I name, so trimming never needs a new take. Its parts:
+    - **A stand-in for Gmail** that answers the same requests as Google's API, in memory. My real `gmail_client.py`, MCP server and buttons run on top of it, unchanged. It has no way to send or delete an email, the code that connects to Google is blocked, and the browser can only open the demo's own pages.
+    - **A throwaway log, labels file and profile files,** made up, built like the old screenshot script's.
+    - **The recording of Claude's answers.** It plugs into the Anthropic library where its connection to the internet would be.
+    - **The storyboard** of 31 frames.
+  - `requirements-dev.txt`, and `docs/demo.gif`.
+  - **The final README:** the GIF instead of the screenshots, how to run it on another computer, a Status that says what isn't measured yet, and a corrected sentence. It said my code saves a draft "only after the Critic approves", which stopped being true when the page got "Save anyway".
+- **Learned:**
+  - **Record and replay.** It's a common way to test code that calls a paid service: record real answers once, then play them back (tools for it are often called "cassettes"). The hard part is recognizing the same question again. Every request to Claude starts with today's date, and the made-up emails' dates move with the day of the take. So a request is recognized by everything except its dates, times and day names.
+  - **A stand-in at the lowest level tests the most.** Replacing Google's API, rather than my own Gmail functions, meant every line of my code ran in the demo as it does for real.
+  - **A GIF has only 256 colours.** The palette is the 256 colours the frames use most, exactly, so the page's whites and blues stay true. Every other pixel, mostly the soft edges of text, gets the nearest of them.
+- **Result:**
+  - **The paid take cost $0.024** for 10 answers from Claude: sorting 5 new emails cost $0.0023, and the draft $0.021. Real Claude found the interview invitation among the 5 and made it a to-do, and the Critic approved the reply on its first review.
+  - **A second take, from the recording, cost nothing.** Its frames were identical, apart from clock times, which follow the time of the take.
+  - **The GIF:** 31 frames, 84 seconds, 1.1 MB.
+  - **A take without permission to pay** stopped at the first request to Claude with no recorded answer, and saved nothing.
+  - **My real log and labels were unchanged** after every take, checked by reading the log without opening it for writing.
+  - **Nothing private in the GIF.** `check_private.py` can't read pictures, so its rules checked everything the GIF can show: the made-up data and Claude's recorded answers. It found nothing private. A few common names and words in the demo also appear in my real data by coincidence, which I decided is fine, since everything in it is made up.
+- **Found:**
+  - **Pillow's colour matching rounds,** so even white came out a slightly cream near-white. The script now matches the colours itself.
+  - **`docs/setup.md` said a first `--apply` signs in to Gmail a second time,** for more permission. That stopped being true in Step 4c, when the app started asking for one permission from the start. Fixed.
+  - **The Sort summary shows the cost to the cent,** so the demo's run of 5 emails says "$0.00". It really cost $0.0023.
+
 ## What's left
 
 - [x] **Step 1:** First call to Claude
@@ -1461,8 +1496,10 @@ With piece 6 built, I drafted a real reply from the page, start to finish, on on
 - [x] A short README with screenshots, with the long text in `docs/`
 - [x] Clean real details out of the Git history, in a new repo that can be public
 - [x] A check before every commit that refuses my private details, using a private word list and my own data
-- [ ] **Step 8:** accuracy tests (evals) and a demo video
+- [x] A demo GIF of every page, with made-up emails and real answers from Claude, and the final README
+- [ ] **Step 8:** accuracy tests (evals), built from my own corrections in the log
+- [ ] Keep upcoming trips and events on the list as reminders, which would be a change to the full read's rules (see "Reading the version of an email I see")
 - [ ] **Cost:** try prompt caching for triage's system prompt, which is the same for every email
 
 **Open questions**
-- Build the demo mode at all? It's mostly for showing the finished product, so I'll decide once the web page works.
+- Build the demo mode at all? The demo GIF now shows the finished product, so a live demo would mostly be for interviews.

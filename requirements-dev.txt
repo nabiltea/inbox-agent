@@ -1,0 +1,7 @@
+# Only for remaking the README's demo GIF (docs/demo.gif), not for running the agent.
+# Playwright drives the Chrome already installed on the computer, so it downloads no browser,
+# and Pillow adds the captions and makes the GIF. greenlet comes with Playwright.
+# Install after requirements.txt:  pip install -r requirements-dev.txt
+playwright==1.65.2
+pillow==13.0.0
+greenlet==3.5.6
